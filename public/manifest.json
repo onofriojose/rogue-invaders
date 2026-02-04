@@ -1,6 +1,7 @@
 {
     "name": "Rogue Invaders",
     "short_name": "Rogue",
+    "description": "Sobrevive al enjambre alienígena en este shooter espacial roguelite.",
     "start_url": "/",
     "display": "standalone",
     "background_color": "#000000",
@@ -8,14 +9,14 @@
     "orientation": "landscape",
     "icons": [
         {
-            "src": "/vite.svg",
+            "src": "/icon-192.png",
             "sizes": "192x192",
-            "type": "image/svg+xml"
+            "type": "image/png"
         },
         {
-            "src": "/vite.svg",
+            "src": "/icon-512.png",
             "sizes": "512x512",
-            "type": "image/svg+xml"
+            "type": "image/png"
         }
     ]
 }
