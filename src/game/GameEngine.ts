@@ -41,6 +41,9 @@ export class GameEngine {
     // Ship Dynamics
     private shipTilt: number = 0;
 
+    // Config
+    private readonly CAMERA_ZOOM: number = 0.6;
+
     // Internals
     private spawnTimer: number = 0;
     private shieldTickTimer: number = 0;
@@ -212,7 +215,7 @@ export class GameEngine {
         const hpMultiplier = Math.random() * 5 + 10; // 10x to 15x
         const hp = SETTINGS.ENEMY.BASE_HP * hpMultiplier * sector;
 
-        const distance = Math.max(this.width, this.height) / 2 + 200;
+        const distance = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + 200;
         const angle = Math.random() * Math.PI * 2;
 
         this.enemies.push({
@@ -316,7 +319,7 @@ export class GameEngine {
             this.spawnTimer = baseInterval;
 
             const angle = Math.random() * Math.PI * 2;
-            const dist = Math.max(this.width, this.height) / 2 + SETTINGS.WORLD.VIEW_PADDING;
+            const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + SETTINGS.WORLD.VIEW_PADDING;
 
             // Base Stats based on Level/Sector
             let hp = SETTINGS.ENEMY.BASE_HP + (this.state.level * 5);
@@ -872,7 +875,11 @@ export class GameEngine {
         // --- 2. CAMERA & WORLD TRANSFORM ---
         ctx.save(); // Save 1: Before Camera
 
-        // Apply Camera Shake
+        // 0. Apply Zoom
+        // Scale the world to zoom out
+        ctx.scale(this.CAMERA_ZOOM, this.CAMERA_ZOOM);
+
+        // Apply Camera Shake (Scaled?)
         if (this.shakeIntensity > 0) {
             const dx = (Math.random() - 0.5) * this.shakeIntensity;
             const dy = (Math.random() - 0.5) * this.shakeIntensity;
@@ -1309,10 +1316,19 @@ export class GameEngine {
     }
 
     private drawEntity(worldX: number, worldY: number, drawFn: () => void) {
-        const screenX = worldX - this.player.x + this.width / 2;
-        const screenY = worldY - this.player.y + this.height / 2;
+        // Fix Centering with Zoom:
+        // Center in "Zoomed Space" is (width / ZOOM) / 2
+        const centerX = (this.width / this.CAMERA_ZOOM) / 2;
+        const centerY = (this.height / this.CAMERA_ZOOM) / 2;
 
-        if (screenX < -50 || screenX > this.width + 50 || screenY < -50 || screenY > this.height + 50) return;
+        const screenX = worldX - this.player.x + centerX;
+        const screenY = worldY - this.player.y + centerY;
+
+        // Cull check (approximate with padding)
+        const visibleW = this.width / this.CAMERA_ZOOM;
+        const visibleH = this.height / this.CAMERA_ZOOM;
+
+        if (screenX < -100 || screenX > visibleW + 100 || screenY < -100 || screenY > visibleH + 100) return;
 
         this.ctx.save();
         this.ctx.translate(screenX, screenY);
