@@ -1041,7 +1041,8 @@ export class GameEngine {
 
         // Draw Player
         ctx.save();
-        ctx.translate(width / 2, height / 2);
+        // Fix Player Centering (Account for Zoom)
+        ctx.translate((width / this.CAMERA_ZOOM) / 2, (height / this.CAMERA_ZOOM) / 2);
 
         // Draw Buff Indicators (Above Player)
         if (this.rapidFireTimer > 0 || this.spreadShotTimer > 0) {
