@@ -3,6 +3,13 @@ export interface Vector2 {
     y: number;
 }
 
+export enum AIState {
+    IDLE = 0,
+    CHASING = 1,
+    CHARGING = 2,
+    ATTACKING = 3
+}
+
 export interface Player {
     x: number;
     y: number;
@@ -10,6 +17,9 @@ export interface Player {
     vy: number;
     angle: number;
     lastShotTime: number;
+    isDashing: boolean;
+    dashCooldown: number;
+    invulnerabilityTimer: number;
 }
 
 export interface Projectile {
@@ -17,6 +27,7 @@ export interface Projectile {
     y: number;
     vx: number;
     vy: number;
+    size: number;
     life: number;
     markedForDeletion: boolean;
 }
@@ -25,6 +36,8 @@ export interface Enemy {
     x: number;
     y: number;
     hp: number;
+    vx?: number;
+    vy?: number;
     maxHp?: number;
     speed: number;
     spriteType: number;
@@ -34,6 +47,9 @@ export interface Enemy {
     bossColor?: string;
     customSize?: number;
     shootCooldown?: number; // Time until next shot
+    aiState?: AIState;
+    stateTimer?: number;
+    chargeTimer?: number;
 }
 
 export interface EnemyProjectile {
@@ -53,6 +69,17 @@ export interface Gem {
     magnetized: boolean;
 }
 
+export interface Obstacle {
+    x: number;
+    y: number;
+    size: number;
+    color: string;
+    markedForDeletion: boolean;
+    isExploding: boolean; // Flashing phase
+    explodeTimer: number;
+    vertices?: { x: number, y: number }[];
+}
+
 export interface Particle {
     x: number;
     y: number;
@@ -64,10 +91,17 @@ export interface Particle {
     markedForDeletion: boolean;
 }
 
+export interface Beacon {
+    x: number;
+    y: number;
+    radius: number;
+    active: boolean;
+}
+
 export interface DamageText {
     x: number;
     y: number;
-    value: number;
+    value: number | string;
     life: number;
     opacity: number;
     markedForDeletion: boolean;

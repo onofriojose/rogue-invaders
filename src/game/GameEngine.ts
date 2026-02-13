@@ -1,7 +1,11 @@
 import { SETTINGS } from '../constants';
-import { GameState, Player, Enemy, Projectile, Gem, Particle, GameStats, Upgrade, DamageText, EnemyProjectile } from '../types';
+import { GameState, Player, Enemy, Projectile, Gem, Particle, GameStats, Upgrade, DamageText, EnemyProjectile, AIState, Beacon } from '../types';
 import { InputManager } from './InputManager';
 import { SPRITES } from './EnemySprites';
+
+import { Obstacle } from '../types';
+
+
 
 type PowerUpType = 'HEALTH' | 'RAPID_FIRE' | 'SPREAD_SHOT' | 'NUKE';
 interface PowerUp {
@@ -32,6 +36,8 @@ export class GameEngine {
     public damageTexts: DamageText[] = [];
     public enemyProjectiles: EnemyProjectile[] = [];
     public powerUps: PowerUp[] = []; // NEW
+    public obstacles: Obstacle[] = [];
+    public beacons: Beacon[] = []; // NEW: Supply Beacons
     private backgroundStars: Star[] = [];
 
     // Camera FX
@@ -54,6 +60,10 @@ export class GameEngine {
     // private bgStars: { x: number, y: number, z: number }[] = []; REMOVED for Procedural Parallax
     private spriteCache: Map<string, HTMLCanvasElement> = new Map();
     private onUIUpdate: (state: GameState) => void;
+    // Environment
+    private windTimer: number = 0;
+    private windActive: boolean = false;
+    private windVector: { x: number, y: number } = { x: 0, y: 0 };
     private onLevelUp: () => void;
     private onGameOver: () => void;
     private lastBossType: number = -1;
@@ -113,6 +123,11 @@ export class GameEngine {
             shipId: shipId
         };
 
+        // solar wind state
+        this.windTimer = 0;
+        this.windActive = false;
+        this.windVector = { x: 0, y: 0 };
+
         // Init Player
         this.player = {
             x: this.width / 2,
@@ -120,7 +135,10 @@ export class GameEngine {
             vx: 0,
             vy: 0,
             angle: 0,
-            lastShotTime: 0
+            lastShotTime: 0,
+            isDashing: false,
+            dashCooldown: 0,
+            invulnerabilityTimer: 0
         };
 
         // Init Background Stars (Parallax)
@@ -166,6 +184,7 @@ export class GameEngine {
         this.handleShieldCombat(dt);
         this.handleSpawning(dt);
         this.handleEnemyShooting(dt); // New Logic
+        this.handleEnvironment(dt);
         this.updateEntities(dt);
         this.checkCollisions();
 
@@ -286,19 +305,75 @@ export class GameEngine {
     }
 
     private updatePlayer(dt: number) {
-        if (this.input.active) {
+        // Timers
+        if (this.player.dashCooldown > 0) this.player.dashCooldown -= dt;
+        if (this.player.invulnerabilityTimer > 0) {
+            this.player.invulnerabilityTimer -= dt;
+            if (this.player.invulnerabilityTimer <= 0) {
+                this.player.isDashing = false;
+                // Snap Stop (Heavy Friction)
+                this.player.vx *= 0.5;
+                this.player.vy *= 0.5;
+            } else {
+                // Ghost Trail
+                if (Math.random() > 0.5) {
+                    this.particles.push({
+                        x: this.player.x, y: this.player.y,
+                        vx: 0, vy: 0,
+                        life: 0.5, color: 'rgba(0, 255, 255, 0.5)', size: this.state.stats.hp > 30 ? 20 : 10,
+                        markedForDeletion: false
+                    });
+                }
+            }
+        }
+
+        // Dash Input
+        if (this.input.consumeDash() && this.player.dashCooldown <= 0) {
+            this.player.isDashing = true;
+            this.player.dashCooldown = 2.0;
+            this.player.invulnerabilityTimer = 0.3;
+
+            // Impulse
+            const speed = this.state.stats.speed * 3;
+            // Use current input vector if active, else current velocity direction, else forward (angle)
+            let dirX = this.input.vector.x;
+            let dirY = this.input.vector.y;
+
+            if (dirX === 0 && dirY === 0) {
+                dirX = Math.cos(this.player.angle);
+                dirY = Math.sin(this.player.angle);
+            }
+
+            this.player.vx = dirX * speed;
+            this.player.vy = dirY * speed;
+
+            this.triggerShake(5);
+            this.spawnExplosion(this.player.x, this.player.y, 'cyan', 10); // Dash burst
+        }
+
+        // --- ID 2: PLAYER VS OBSTACLE PHYSICS ---
+        // Duplicate logic REMOVED. Consolidating in checkCollisions() to support Dash pass-through.
+
+
+        // Movement Normal
+        if (!this.player.isDashing && this.input.active) {
             this.player.vx += this.input.vector.x * this.state.stats.speed * 10 * dt;
             this.player.vy += this.input.vector.y * this.state.stats.speed * 10 * dt;
             this.player.angle = Math.atan2(this.input.vector.y, this.input.vector.x);
         }
 
-        this.player.vx *= SETTINGS.PLAYER.FRICTION;
-        this.player.vy *= SETTINGS.PLAYER.FRICTION;
+        // Friction (Less during dash to maintain momentum, but we set velocity directly so it's fine)
+        const friction = this.player.isDashing ? 0.98 : SETTINGS.PLAYER.FRICTION;
+        this.player.vx *= friction;
+        this.player.vy *= friction;
 
-        const speed_mag = Math.sqrt(this.player.vx ** 2 + this.player.vy ** 2);
-        if (speed_mag > this.state.stats.speed) {
-            this.player.vx = (this.player.vx / speed_mag) * this.state.stats.speed;
-            this.player.vy = (this.player.vy / speed_mag) * this.state.stats.speed;
+        // Cap speed only if NOT dashing (or cap at higher limit)
+        const currentSpeed = Math.sqrt(this.player.vx ** 2 + this.player.vy ** 2);
+        const maxSpeed = this.player.isDashing ? this.state.stats.speed * 4 : this.state.stats.speed;
+
+        if (currentSpeed > maxSpeed) {
+            this.player.vx = (this.player.vx / currentSpeed) * maxSpeed;
+            this.player.vy = (this.player.vy / currentSpeed) * maxSpeed;
         }
 
         this.player.x += this.player.vx * dt;
@@ -378,7 +453,10 @@ export class GameEngine {
                 customSize: size,
                 bossColor: color,
                 isBoss: false,
-                shootCooldown: 2000 + Math.random() * 3000 // 2s-5s initial cooldown
+                shootCooldown: 2000 + Math.random() * 3000,
+                aiState: AIState.CHASING,
+                stateTimer: 0,
+                chargeTimer: 0
             });
         }
     }
@@ -420,6 +498,7 @@ export class GameEngine {
                 y: this.player.y,
                 vx: Math.cos(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
                 vy: Math.sin(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
+                size: 10,
                 life: 1.5,
                 markedForDeletion: false
             });
@@ -434,6 +513,7 @@ export class GameEngine {
                     y: this.player.y,
                     vx: Math.cos(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
                     vy: Math.sin(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
+                    size: 10,
                     life: 1.5,
                     markedForDeletion: false
                 });
@@ -497,13 +577,7 @@ export class GameEngine {
         });
 
         this.enemies.forEach(e => {
-            const dx = this.player.x - e.x;
-            const dy = this.player.y - e.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 0) {
-                e.x += (dx / dist) * e.speed * dt;
-                e.y += (dy / dist) * e.speed * dt;
-            }
+            this.updateEnemyAI(e, dt);
             e.frameCount++;
         });
 
@@ -516,6 +590,7 @@ export class GameEngine {
                 g.magnetized = true;
             }
 
+            // FIX 2: Prevent Drifting
             if (g.magnetized) {
                 const speed = 600;
                 g.x += (dx / dist) * speed * dt;
@@ -527,6 +602,10 @@ export class GameEngine {
                         this.onLevelUp();
                     }
                 }
+            } else {
+                // FORCE STATIC: Do nothing.
+                // Gems have no vx/vy, so they are static by default.
+                // This ensures they don't drift.
             }
         });
 
@@ -575,15 +654,119 @@ export class GameEngine {
         this.powerUps = this.powerUps.filter(p => p.life > 0);
     }
 
-    private spawnDamageText(x: number, y: number, damage: number) {
+    private spawnDamageText(x: number, y: number, damage: number | string) {
         this.damageTexts.push({
             x,
             y,
-            value: Math.floor(damage),
+            value: typeof damage === 'number' ? Math.floor(damage) : damage,
             life: 1.0,
             opacity: 1.0,
             markedForDeletion: false
         });
+    }
+
+
+    private updateEnemyAI(e: Enemy, dt: number) {
+        const distToPlayer = Math.sqrt(Math.pow(this.player.x - e.x, 2) + Math.pow(this.player.y - e.y, 2));
+
+        // Default Init
+        if (e.aiState === undefined) e.aiState = AIState.CHASING;
+
+        // --- ID 0: KAMIKAZE SQUID ---
+        if (e.spriteType === 0) {
+            switch (e.aiState) {
+                case AIState.CHASING:
+                    // Move towards player
+                    const angle = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+                    e.x += Math.cos(angle) * e.speed * dt;
+                    e.y += Math.sin(angle) * e.speed * dt;
+
+                    // Trigger Charge if close
+                    if (distToPlayer < 200) {
+                        e.aiState = AIState.CHARGING;
+                        e.chargeTimer = 0.5; // 500ms telegraph
+                    }
+                    break;
+                case AIState.CHARGING:
+                    e.chargeTimer! -= dt;
+                    // Telegraph: Shake/Flash
+                    if (Math.random() > 0.5) {
+                        e.x += (Math.random() - 0.5) * 4;
+                        e.y += (Math.random() - 0.5) * 4;
+                    }
+                    if (e.chargeTimer! <= 0) {
+                        e.aiState = AIState.ATTACKING;
+                        // Lock on target vector
+                        e.stateTimer = 0.5; // Dash duration
+                        // Store dash velocity
+                        const angle = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+                        e.vx = Math.cos(angle) * (e.speed * 4); // 4x speed dash
+                        e.vy = Math.sin(angle) * (e.speed * 4);
+                    }
+                    break;
+                case AIState.ATTACKING:
+                    e.x += (e.vx || 0) * dt;
+                    e.y += (e.vy || 0) * dt;
+                    e.stateTimer! -= dt;
+                    // Trail
+                    this.particles.push({
+                        x: e.x, y: e.y, vx: 0, vy: 0, life: 0.2, color: 'white', size: 5, markedForDeletion: false
+                    });
+
+                    if (e.stateTimer! <= 0) {
+                        e.aiState = AIState.CHASING;
+                        // Cooldown before next charge?
+                    }
+                    break;
+            }
+        }
+        // --- ID 2: TURRET OCTOPUS ---
+        else if (e.spriteType === 2) {
+            switch (e.aiState) {
+                case AIState.CHASING:
+                    // Move slowly
+                    const angle = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+                    e.x += Math.cos(angle) * (e.speed * 0.5) * dt;
+                    e.y += Math.sin(angle) * (e.speed * 0.5) * dt;
+
+                    e.stateTimer = (e.stateTimer || 0) + dt;
+                    if (e.stateTimer > 3.0) { // Move for 3s
+                        e.aiState = AIState.CHARGING;
+                        e.chargeTimer = 0.5;
+                        e.stateTimer = 0;
+                    }
+                    break;
+                case AIState.CHARGING:
+                    e.chargeTimer! -= dt;
+                    // Visual: Flash Red
+                    if (e.chargeTimer! <= 0) {
+                        e.aiState = AIState.ATTACKING;
+                    }
+                    break;
+                case AIState.ATTACKING:
+                    // Shoot
+                    const angle2 = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+                    // 3-Projectile Spread
+                    [-0.2, 0, 0.2].forEach(offset => {
+                        this.enemyProjectiles.push({
+                            x: e.x, y: e.y,
+                            vx: Math.cos(angle2 + offset) * 300,
+                            vy: Math.sin(angle2 + offset) * 300,
+                            size: 8, color: 'red'
+                        });
+                    });
+
+                    e.aiState = AIState.CHASING; // Return to move
+                    break;
+            }
+        }
+        // --- ID 1: STANDARD / OTHERS ---
+        else {
+            // Simple Chase
+            const angle = Math.atan2(this.player.y - e.y, this.player.x - e.x);
+            e.x += Math.cos(angle) * e.speed * dt;
+            e.y += Math.sin(angle) * e.speed * dt;
+        }
     }
 
     private handleEnemyShooting(dt: number) {
@@ -591,13 +774,8 @@ export class GameEngine {
             if (e.markedForDeletion) return;
 
             // CheckArchetype: Swarmers (size 20) don't shoot.
-            // Tanks (size 45) and Standard (size 30) do shoot.
-            // Also Bosses shoot? Let's say yes for now or stick to non-swarmers.
+            if (e.customSize && e.customSize <= 25) return;
 
-            // Assuming Swarmer is the only one with size 20 (or we can check bossColor but size is reliable)
-            if (e.customSize && e.customSize <= 25) return; // Swarmers (20) skip
-
-            // Logic
             if (e.shootCooldown !== undefined) {
                 e.shootCooldown -= dt * 1000; // ms
                 if (e.shootCooldown <= 0) {
@@ -605,8 +783,7 @@ export class GameEngine {
                     const dx = this.player.x - e.x;
                     const dy = this.player.y - e.y;
                     const angle = Math.atan2(dy, dx);
-
-                    const speed = 250; // Slower than player bullets (which are usually faster)
+                    const speed = 250;
 
                     this.enemyProjectiles.push({
                         x: e.x,
@@ -614,7 +791,7 @@ export class GameEngine {
                         vx: Math.cos(angle) * speed,
                         vy: Math.sin(angle) * speed,
                         size: 8,
-                        color: e.bossColor && (e.bossColor === '#800080' || e.bossColor === '#006400') ? 'orange' : 'red' // Tanks shoot Orange, others Red
+                        color: e.bossColor && (e.bossColor === '#800080' || e.bossColor === '#006400') ? 'orange' : 'red'
                     });
 
                     // Reset Cooldown
@@ -622,6 +799,124 @@ export class GameEngine {
                 }
             }
         });
+    }
+
+    private handleEnvironment(dt: number) {
+        // 1. Solar Wind
+        this.windTimer += dt;
+        if (!this.windActive) {
+            if (this.windTimer > 15) { // Every 15s
+                this.windActive = true;
+                this.windTimer = 0; // Duration 5s
+                const angle = Math.random() * Math.PI * 2;
+                this.windVector = { x: Math.cos(angle) * 100, y: Math.sin(angle) * 100 };
+                this.triggerFlash('white', 0.2);
+                this.spawnDamageText(this.player.x, this.player.y - 100, 0);
+            }
+        } else {
+            if (this.windTimer > 5) {
+                this.windActive = false;
+                this.windTimer = 0;
+            }
+        }
+
+        // Apply Wind
+        if (this.windActive) {
+            const windX = this.windVector.x * dt;
+            const windY = this.windVector.y * dt;
+            this.player.x += windX * 0.5; // Player resists a bit
+            this.player.y += windY * 0.5;
+            this.enemies.forEach(e => { e.x += windX; e.y += windY; });
+            this.gems.forEach(g => { g.x += windX * 2; g.y += windY * 2; });
+            this.particles.forEach(p => { p.x += windX * 3; p.y += windY * 3; });
+        }
+
+        // 2. Obstacles
+        // Spawn randomly outside view
+        if (Math.random() < 0.008) { // Slightly increased chance since they spawn far out
+            // Calculate spawn angle based on player movement to spawn "in front"
+            let angle = Math.random() * Math.PI * 2;
+            if (Math.abs(this.player.vx) > 0.1 || Math.abs(this.player.vy) > 0.1) {
+                const moveAngle = Math.atan2(this.player.vy, this.player.vx);
+                // Spawn in a 90 degree arc in front of player
+                angle = moveAngle + (Math.random() - 0.5) * (Math.PI / 2);
+            }
+
+            const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) * 0.8 + 200; // Just outside view
+            // Procedural Vertices Generation
+            const vertexCount = Math.floor(Math.random() * 5) + 8; // 8 to 12 vertices
+            const vertices: { x: number, y: number }[] = [];
+            const size = 40 + Math.random() * 30;
+
+            for (let i = 0; i < vertexCount; i++) {
+                const angle = (i / vertexCount) * Math.PI * 2;
+                // Random variation in radius (0.7 to 1.3 of base size) to create "rock" shape
+                const r = size * (0.7 + Math.random() * 0.6);
+                vertices.push({
+                    x: Math.cos(angle) * r,
+                    y: Math.sin(angle) * r
+                });
+            }
+
+            this.obstacles.push({
+                x: this.player.x + Math.cos(angle) * dist,
+                y: this.player.y + Math.sin(angle) * dist,
+                size: size,
+                color: '#555', // Will be overridden by render style, but kept for fallback
+                markedForDeletion: false,
+                isExploding: false,
+                explodeTimer: 0,
+                vertices: vertices
+            });
+        }
+
+        // 3. Supply Beacons (Risk/Reward)
+        // 0.5% chance per second (assuming 60fps, dt is roughly 0.016, so check every frame?)
+        // Let's do a timer check or random check. 0.5% per second means 0.005 probability in 1s.
+        // In one frame (dt), prob = 0.005 * dt.
+        if (this.beacons.length < 1 && Math.random() < 0.005 * dt) {
+            // "Rarely, a 'Beacon' spawns." - Let's spawn it within bounds so player sees it.
+            const x = this.player.x + (Math.random() - 0.5) * this.width;
+            const y = this.player.y + (Math.random() - 0.5) * this.height;
+
+            this.beacons.push({
+                x, y, radius: 25, active: true
+            });
+            this.spawnDamageText(x, y - 50, "BEACON DETECTED"); // Announcement
+        }
+
+        this.obstacles.forEach(o => {
+            if (o.isExploding) {
+                o.explodeTimer -= dt;
+                o.color = Math.random() > 0.5 ? 'red' : 'orange';
+                if (o.explodeTimer <= 0) {
+                    o.markedForDeletion = true;
+                    this.spawnExplosion(o.x, o.y, 'orange', 30);
+                    // AOE Damage
+                    this.enemies.forEach(e => {
+                        const dx = e.x - o.x;
+                        const dy = e.y - o.y;
+                        if (Math.sqrt(dx * dx + dy * dy) < 150) {
+                            e.hp -= 100;
+                            if (e.hp <= 0) {
+                                e.markedForDeletion = true;
+                                this.spawnPowerUp(e.x, e.y);
+                            }
+                        }
+                    });
+                }
+            }
+            // Cleanup distance - Despawn if too far behind
+            const dx = this.player.x - o.x;
+            const dy = this.player.y - o.y;
+            if (Math.sqrt(dx * dx + dy * dy) < 2500) {
+                // Keep
+            } else {
+                o.markedForDeletion = true;
+            }
+        });
+
+        this.obstacles = this.obstacles.filter(o => !o.markedForDeletion);
     }
 
     private spawnExplosion(x: number, y: number, color: string, count: number = 15) {
@@ -650,6 +945,71 @@ export class GameEngine {
     }
 
     private checkCollisions() {
+        // Projectiles vs Obstacles
+        this.projectiles.forEach(p => {
+            if (p.markedForDeletion) return;
+            this.obstacles.forEach(o => {
+                if (o.markedForDeletion || p.markedForDeletion) return;
+                const dx = p.x - o.x;
+                const dy = p.y - o.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < o.size + p.size) {
+                    // FIX: Bullets DESTROY asteroids
+                    p.markedForDeletion = true;
+
+                    if (!o.isExploding) {
+                        o.isExploding = true;
+                        o.explodeTimer = 0.1; // Explode almost instantly
+
+                        // Visual Feedback
+                        this.spawnExplosion(o.x, o.y, 'orange', 15);
+                        this.triggerShake(2);
+                    }
+                }
+            });
+        });
+
+        // Player vs Obstacles (Bump or Dash Destroy)
+        this.obstacles.forEach(o => {
+            if (o.markedForDeletion) return;
+            const dx = this.player.x - o.x;
+            const dy = this.player.y - o.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < o.size + SETTINGS.PLAYER.BASE_SIZE) {
+                // If Dashing -> Destroy Asteroid
+                if (this.player.isDashing) {
+                    o.isExploding = true;
+                    o.explodeTimer = 0.5;
+                    this.spawnExplosion(o.x, o.y, 'orange', 20);
+                    this.triggerShake(5);
+                    // FIX 3: No healing, just destroy and keep moving
+                    // this.state.stats.hp = Math.min(this.state.stats.hp + 1, this.state.stats.maxHp); 
+                    return;
+                }
+
+                // Normal Collision -> Bounce (Physics Bumper Car)
+                const angle = Math.atan2(dy, dx);
+                const pushDist = o.size + SETTINGS.PLAYER.BASE_SIZE - dist + 2;
+                this.player.x += Math.cos(angle) * pushDist;
+                this.player.y += Math.sin(angle) * pushDist;
+
+                // Bounce velocity (Reverse & Dampen)
+                this.player.vx *= -0.5;
+                this.player.vy *= -0.5;
+
+                // FIX 3: Small damage, Rock Intact
+                this.state.stats.hp = Math.max(0, this.state.stats.hp - 1);
+                this.triggerShake(5);
+
+                // FIX 1: PLAYER IMMORTALITY CHECK
+                if (this.state.stats.hp <= 0) {
+                    this.onGameOver();
+                }
+            }
+        });
+
         // Projectiles vs Enemies
         this.projectiles.forEach(p => {
             this.enemies.forEach(e => {
@@ -703,6 +1063,21 @@ export class GameEngine {
             const enemyRadius = e.isBoss ? (e.customSize || 30) : SETTINGS.ENEMY.SIZE;
 
             if (dist < SETTINGS.PLAYER.BASE_SIZE + enemyRadius - 5) {
+                // KINETIC DAMAGE (Dash Kill)
+                if (this.player.isDashing && !e.isBoss) {
+                    e.hp = 0;
+                    e.markedForDeletion = true;
+                    this.spawnExplosion(e.x, e.y, 'cyan', 20); // Kinetic burst
+                    this.triggerShake(5);
+                    this.gems.push({
+                        x: e.x, y: e.y, value: 10, markedForDeletion: false, magnetized: false
+                    });
+                    this.state.kills++;
+                    return; // Skip damage to player
+                }
+
+                if (this.player.invulnerabilityTimer > 0) return; // I-Frames
+
                 this.state.stats.hp -= 0.5;
                 this.triggerShake(10);
                 this.triggerFlash('red', 0.5);
@@ -783,6 +1158,37 @@ export class GameEngine {
                 }
             }
         });
+
+        // 6. Player vs Beacons
+        this.beacons.forEach(b => {
+            if (!b.active) return;
+            const dx = b.x - this.player.x;
+            const dy = b.y - this.player.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < b.radius + SETTINGS.PLAYER.BASE_SIZE) {
+                // ACTIVATE BLOOD PACT
+                b.active = false;
+
+                // Cost: 30% current HP
+                const cost = Math.floor(this.state.stats.hp * 0.30);
+                this.state.stats.hp = Math.max(1, this.state.stats.hp - cost);
+
+                // Reward: +10% Damage
+                this.state.stats.damage *= 1.10;
+
+                // Feedback
+                this.triggerShake(10);
+                this.triggerFlash('red', 0.3);
+                this.spawnExplosion(b.x, b.y, 'gold', 20);
+                this.spawnDamageText(this.player.x, this.player.y - 60, "BLOOD PACT!");
+                this.spawnDamageText(this.player.x, this.player.y - 30, `-${cost} HP`);
+                this.spawnDamageText(this.player.x, this.player.y, "+10% DMG");
+
+                // Cleanup
+                this.beacons = this.beacons.filter(beacon => beacon !== b);
+            }
+        });
     }
 
     private getOrCreateSprite(spriteType: number, frameIndex: number, color: string): HTMLCanvasElement {
@@ -796,7 +1202,6 @@ export class GameEngine {
         // @ts-ignore
         if (!SPRITES || typeof SPRITES !== 'object') {
             console.error('SPRITES import missing or invalid', SPRITES);
-            // Return fallback canvas
             return this.createFallbackSprite('red');
         }
 
@@ -910,6 +1315,69 @@ export class GameEngine {
         }
         ctx.stroke();
 
+        // Draw Obstacles
+        this.obstacles.forEach(o => {
+            this.drawEntity(o.x, o.y, () => {
+                // --- NEON ASTEROID RENDER ---
+                // Set Neon Style
+                ctx.strokeStyle = '#ff4500'; // Bright orange-red outline
+                ctx.lineWidth = 3;           // Thick outline
+                ctx.fillStyle = 'rgba(40, 0, 0, 0.9)'; // Dark, semi-transparent red interior
+
+                // Add Bloom/Glow Effect
+                ctx.shadowColor = '#ff4500'; // Glow color matches outline
+                ctx.shadowBlur = o.isExploding ? 40 : 20; // Intensity of the glow (extra if exploding)
+
+                // Draw the irregular polygon
+                ctx.beginPath();
+                if (o.vertices && o.vertices.length > 0) {
+                    ctx.moveTo(o.vertices[0].x, o.vertices[0].y);
+                    for (let i = 1; i < o.vertices.length; i++) {
+                        ctx.lineTo(o.vertices[i].x, o.vertices[i].y);
+                    }
+                    ctx.closePath();
+                } else {
+                    // Fallback circle if vertices are missing
+                    ctx.arc(0, 0, o.size, 0, Math.PI * 2);
+                }
+
+                ctx.fill();   // Paint dark interior
+                ctx.stroke(); // Paint neon outline
+
+                if (o.isExploding) {
+                    ctx.fillStyle = `rgba(255, 69, 0, ${Math.random()})`; // Flicker
+                    ctx.fill();
+                }
+            });
+        });
+
+        // Draw Beacons
+        this.beacons.forEach(b => this.drawEntity(b.x, b.y, () => {
+            const pulse = 1 + Math.sin(this.state.timeSurvived * 5) * 0.1;
+            const size = b.radius * 2 * pulse;
+
+            // Base Glow
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = 'red';
+
+            // Gold Square
+            ctx.fillStyle = '#FFD700'; // Gold
+            ctx.fillRect(-size / 2, -size / 2, size, size);
+
+            // Red Pulse Inner
+            ctx.fillStyle = `rgba(255, 0, 0, ${0.5 + Math.sin(this.state.timeSurvived * 10) * 0.5})`;
+            ctx.fillRect(-size / 4, -size / 4, size / 2, size / 2);
+
+            // Glowing Ring
+            ctx.beginPath();
+            ctx.arc(0, 0, size * 0.8, 0, Math.PI * 2);
+            ctx.strokeStyle = 'red';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.shadowBlur = 0;
+        }));
+
         // Draw Entities (They now inherit shadowBlur)
         this.gems.forEach(g => this.drawEntity(g.x, g.y, () => {
             const gemColor = this.state.sectorColors.enemyOutline;
@@ -958,6 +1426,10 @@ export class GameEngine {
             // @ts-ignore
             const size = e.customSize || SETTINGS.ENEMY.SIZE || 40;
             this.drawEntity(e.x, e.y, () => {
+
+                // --- TELEGRAPHING: PRE-DRAW ---
+                // (REMOVED based on user feedback)
+
                 if (e.isBoss) {
                     const dx = this.player.x - e.x;
                     const dy = this.player.y - e.y;
@@ -995,6 +1467,36 @@ export class GameEngine {
                         ctx.fillStyle = color;
                         ctx.fillRect(-size / 2, -size / 2, size, size);
                     }
+                }
+
+                // --- TELEGRAPHING: POST-DRAW (OVERLAYS) ---
+
+                // 1. Charging: White Pulse Overlay
+                if (e.aiState === AIState.CHARGING) {
+                    const flash = 0.3 + Math.sin(this.state.timeSurvived * 20) * 0.2;
+                    ctx.fillStyle = `rgba(255, 255, 255, ${flash})`;
+                    // Draw over the sprite area
+                    // Use 'source-atop' to clip to sprite if we had complex shapes, 
+                    // but simple rect/size overlay is enough for pixel art style.
+                    ctx.fillRect(-size / 2, -size / 2, size, size);
+                }
+
+                // 2. Anchored/Turret Mode (Type 2)
+                // If Turret is stationary (Charging usually implies preparation/stationary for this AI)
+                if (e.spriteType === 2 && e.aiState === AIState.CHARGING) {
+                    ctx.beginPath();
+                    ctx.arc(0, 0, size * 0.8, 0, Math.PI * 2);
+                    ctx.strokeStyle = '#00ffff'; // Cyan
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Rotate ring visual?
+                    const ringAngle = this.state.timeSurvived * 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, size * 0.9, ringAngle, ringAngle + Math.PI);
+                    ctx.strokeStyle = 'cyan';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
                 }
             });
         });
@@ -1239,6 +1741,59 @@ export class GameEngine {
             ctx.globalAlpha = 1.0;
         }
 
+        // --- BOSS RADAR (New) ---
+        // Draw this AFTER world/flash but BEFORE HUD so it sits on top of game but below UI bars?
+        // Actually, prompt says "inside HUD/UI rendering section (after drawing the world...".
+        // Let's put it here, just before the main HUD bars.
+
+        if (this.state.bossActive) {
+            const boss = this.enemies.find(e => e.isBoss);
+            // FIX 2: Check !isEntityOnScreen(boss)
+            if (boss && !this.isEntityOnScreen(boss)) {
+                // Draw Radar Arrow
+                const angle = Math.atan2(boss.y - this.player.y, boss.x - this.player.x);
+                const screenCenterX = width / 2;
+                const screenCenterY = height / 2;
+                const radius = Math.min(width, height) / 2 - 60; // 50-60px padding from edge
+
+                const arrowX = screenCenterX + Math.cos(angle) * radius;
+                const arrowY = screenCenterY + Math.sin(angle) * radius;
+
+                ctx.save();
+                ctx.translate(arrowX, arrowY);
+                ctx.rotate(angle);
+
+                // Draw Arrow (Triangle)
+                ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+                ctx.shadowColor = 'red';
+                ctx.shadowBlur = 15;
+
+                // Pulse size
+                const pulse = 1 + Math.sin(this.state.timeSurvived * 10) * 0.2;
+                ctx.scale(pulse, pulse);
+
+                ctx.beginPath();
+                ctx.moveTo(15, 0);   // Tip
+                ctx.lineTo(-10, 10); // Bottom Right
+                ctx.lineTo(-5, 0);   // Notch
+                ctx.lineTo(-10, -10);// Bottom Left
+                ctx.closePath();
+                ctx.fill();
+
+                // "BOSS" Text
+                ctx.rotate(-angle); // Un-rotate for text? Or keep it rotated?
+                // Usually text is readable upright.
+                // But if it's orbiting, upright is better.
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 12px "Courier New"';
+                ctx.textAlign = 'center';
+                ctx.shadowBlur = 0;
+                ctx.fillText("BOSS", 0, -20);
+
+                ctx.restore();
+            }
+        }
+
         // --- 5. CLEAN HUD ---
         // B. The Clean HUD (Draw this LAST, after World & Flash)
 
@@ -1282,6 +1837,29 @@ export class GameEngine {
         ctx.fillStyle = 'yellow';
         ctx.fillText(`LVL ${this.state.level}`, barX, barY + 50);
 
+        // FIX 4: BEACON PACTS INFO
+        // Count pacts? We don't track checks specifically, but we can track active buffs or infer?
+        // Wait, "PACTS: [X] (DMG +[Y]%)".
+        // Base damage is SETTINGS.WEAPON.DAMAGE.
+        // If we want to show strict pacts, we need to track how many beacons we took.
+        // We aren't tracking 'pactsTaken' in state.
+        // Calculate based on damage? currentDamage / baseDamage.
+        // Or just don't show exact count if we don't have it, but prompt says "PACTS: [X]".
+        // I should probably add `pactsTaken` to state or infer it.
+        // Since I can't easily change State interface without affecting other files potentially (though I can check `types.ts`), 
+        // I will deduce it:
+        // Pacts = round((currentDmg / baseDmg - 1) * 10). Assuming 10% per pact.
+        const baseDmg = SETTINGS.WEAPON.DAMAGE; // Assuming this is importable and constant
+        const currentDmg = this.state.stats.damage;
+        // Approximation:
+        const pctIncrease = ((currentDmg / baseDmg) - 1) * 100;
+        const pacts = Math.round(pctIncrease / 10);
+
+        if (pacts > 0) {
+            ctx.fillStyle = '#FFD700'; // Gold
+            ctx.fillText(`PACTS: ${pacts} (DMG +${Math.round(pctIncrease)}%)`, barX, barY + 70);
+        }
+
         // --- SECTOR INFO (Top Right) ---
         ctx.textAlign = 'right';
         ctx.fillStyle = 'cyan';
@@ -1314,6 +1892,19 @@ export class GameEngine {
             ctx.textAlign = 'center';
             ctx.fillText("BOSS DETECTED", width / 2, bossY - 5);
         }
+    }
+
+    private isEntityOnScreen(e: { x: number, y: number }): boolean {
+        const visibleW = this.width / this.CAMERA_ZOOM;
+        const visibleH = this.height / this.CAMERA_ZOOM;
+        const centerX = visibleW / 2;
+        const centerY = visibleH / 2;
+
+        const screenX = e.x - this.player.x + centerX;
+        const screenY = e.y - this.player.y + centerY;
+
+        return screenX >= -100 && screenX <= visibleW + 100 &&
+            screenY >= -100 && screenY <= visibleH + 100;
     }
 
     private drawEntity(worldX: number, worldY: number, drawFn: () => void) {

@@ -3,6 +3,7 @@ import { GameEngine } from './game/GameEngine';
 import { InputManager } from './game/InputManager';
 import { Upgrade, GameStats } from './types';
 import { Joystick } from './components/Joystick';
+import { DashButton } from './components/DashButton';
 import { UpgradeModal } from './components/UpgradeModal';
 import { SHIP_DEFINITIONS, ShipArchetype } from './data/ships';
 import { SaveManager, SaveData } from './managers/SaveManager';
@@ -394,6 +395,9 @@ function App() {
 
                     {/* JOYSTICK */}
                     <Joystick visible={joystickVisible} position={joystickPos} knobPosition={knobPos} />
+
+                    {/* DASH BUTTON */}
+                    <DashButton onTrigger={() => inputRef.current.triggerDash()} />
 
                     {/* UPGRADE MODAL */}
                     {showUpgrade && <UpgradeModal upgrades={upgradeOptions} onSelect={onSelectUpgrade} />}

@@ -3,6 +3,7 @@ import { Vector2 } from '../types';
 export class InputManager {
     public active: boolean = false;
     public vector: Vector2 = { x: 0, y: 0 };
+    public dashPressed: boolean = false;
 
     private startPos: Vector2 = { x: 0, y: 0 };
     private currentPos: Vector2 = { x: 0, y: 0 };
@@ -22,6 +23,18 @@ export class InputManager {
         this.mouseUp = this.mouseUp.bind(this);
         this.onKeyDown = this.onKeyDown.bind(this);
         this.onKeyUp = this.onKeyUp.bind(this);
+    }
+
+    public consumeDash(): boolean {
+        if (this.dashPressed) {
+            this.dashPressed = false;
+            return true;
+        }
+        return false;
+    }
+
+    public triggerDash() {
+        this.dashPressed = true;
     }
 
     public attach(element: HTMLElement) {
@@ -73,6 +86,13 @@ export class InputManager {
 
     private touchEnd(e: TouchEvent) {
         e.preventDefault();
+        // Detect Tap for Dash (if duration < 200ms and minimal movement)
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - this.startPos.x;
+        const dy = touch.clientY - this.startPos.y;
+        if (Math.sqrt(dx * dx + dy * dy) < 10) {
+            this.dashPressed = true;
+        }
         this.endInteraction();
     }
 
@@ -138,6 +158,9 @@ export class InputManager {
 
     private onKeyDown(e: KeyboardEvent) {
         this.keys[e.code] = true;
+        if (e.code === 'Space') {
+            this.dashPressed = true;
+        }
         this.updateKeyVector();
     }
 
