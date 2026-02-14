@@ -50,6 +50,13 @@ export interface Enemy {
     aiState?: AIState;
     stateTimer?: number;
     chargeTimer?: number;
+    attackTimer?: number;
+    attackState?: number;
+    angleOffset?: number;
+    minionsSpawned?: number;
+    reinforceTimer?: number;
+    shield?: number;
+    maxShield?: number;
 }
 
 export interface EnemyProjectile {
@@ -59,6 +66,8 @@ export interface EnemyProjectile {
     vy: number;
     size: number;
     color: string;
+    damage?: number;
+    markedForDeletion?: boolean;
 }
 
 export interface Gem {
@@ -145,6 +154,7 @@ export interface GameState {
     bossCurrentHp: number;
     sectorColors: SectorColors;
     shipId: string;
+    voidMass: number;
 }
 
 export interface Upgrade {

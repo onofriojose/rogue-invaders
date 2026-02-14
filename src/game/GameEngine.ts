@@ -120,7 +120,8 @@ export class GameEngine {
                 enemyOutline: SETTINGS.COLORS.ENEMY,
                 enemyFill: 'transparent'
             },
-            shipId: shipId
+            shipId: shipId,
+            voidMass: 0
         };
 
         // solar wind state
@@ -207,15 +208,16 @@ export class GameEngine {
         this.state.bossActive = true;
         const sector = this.state.currentSector;
 
-        // 4. Force Boss Variety
-        const availableTypes = [10, 11, 12];
-        let bossType = availableTypes[0];
-        // Try up to 10 times to get a different boss (safety break)
-        for (let i = 0; i < 10; i++) {
-            bossType = availableTypes[Math.floor(Math.random() * availableTypes.length)];
-            if (bossType !== this.lastBossType) break;
-        }
-        this.lastBossType = bossType;
+        // --- 1. DETERMINISTIC BOSS ROTATION (Custom Order) ---
+        // Order: Mothership (11) -> Interceptor (12) -> Dreadnought (10)
+        const bossOrder = [11, 12, 10];
+
+        // Calculate index: (Sector 1 -> Index 0, Sector 2 -> Index 1, etc.)
+        const typeIndex = (this.state.currentSector - 1) % bossOrder.length;
+        const bossType = bossOrder[typeIndex];
+
+        console.log(`SPAWN BOSS: Sector ${sector} -> Type ${bossType} (Prev: ${this.lastBossType})`);
+        this.lastBossType = bossType; // Record for debug
 
         // 3. Boss Size Buffs
         let bossSize = 40;
@@ -231,25 +233,65 @@ export class GameEngine {
         const maxBossSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.8;
         const speed = Math.min(maxBossSpeed, SETTINGS.ENEMY.BASE_SPEED + Math.random() * (sector * 2) + (sector * 2));
 
-        const hpMultiplier = Math.random() * 5 + 10; // 10x to 15x
+        const hpMultiplier = Math.random() * 5 + 30; // 30x to 35x
         const hp = SETTINGS.ENEMY.BASE_HP * hpMultiplier * sector;
 
         const distance = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + 200;
         const angle = Math.random() * Math.PI * 2;
 
+        const bossX = this.player.x + Math.cos(angle) * distance;
+        const bossY = this.player.y + Math.sin(angle) * distance;
+
         this.enemies.push({
-            x: this.player.x + Math.cos(angle) * distance,
-            y: this.player.y + Math.sin(angle) * distance,
+            x: bossX,
+            y: bossY,
             hp: hp,
             maxHp: hp,
+            shield: hp * 0.5, // 50% Shield
+            maxShield: hp * 0.5,
             speed: speed,
             markedForDeletion: false,
             spriteType: bossType,
             frameCount: 0,
             isBoss: true,
             bossColor: `hsl(${Math.random() * 360}, 100%, 50%)`,
-            customSize: bossSize
+            customSize: bossSize,
+            // --- FIX: EXPLICIT AI INITIALIZATION ---
+            angleOffset: 0,   // Start angle at 0
+            attackTimer: 0,   // Ready to count
+            attackState: 0    // Default state
         });
+
+        // --- SPAWN ELITE GUARDS (THE MEGABONK) ---
+        const eliteCount = 2 + sector; // Difficulty scaling
+        const guardRadius = 150;
+
+        for (let i = 0; i < eliteCount; i++) {
+            const guardAngle = (i / eliteCount) * Math.PI * 2;
+            const gx = bossX + Math.cos(guardAngle) * guardRadius;
+            const gy = bossY + Math.sin(guardAngle) * guardRadius;
+
+            // Elite Stats
+            // ARCHETYPE: INTERCEPTOR (ID 12) or SQUID (ID 0) for Speed
+            const eliteSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.9; // Fast!
+            const spriteType = Math.random() > 0.5 ? 0 : 12; // Fast types
+
+            this.enemies.push({
+                x: gx,
+                y: gy,
+                hp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 5, // 5x HP
+                maxHp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 5,
+                speed: eliteSpeed,
+                markedForDeletion: false,
+                spriteType: spriteType,
+                frameCount: 0,
+                customSize: 45, // Big
+                bossColor: '#FF4500', // Orange Red Glow
+                isBoss: false, // They are minions
+                shootCooldown: Math.random() * 2000,
+                aiState: AIState.CHASING
+            });
+        }
 
         this.state.bossMaxHp = hp;
         this.state.bossCurrentHp = hp;
@@ -388,17 +430,17 @@ export class GameEngine {
         this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
             // 2. Nerf Initial Spawn Rate & Scale (ADJUSTED: 2x Faster Start)
-            // Sector 1: 1.0s (was 2.0s)
-            // Scaling: -0.1s per sector until 0.3s clamp
-            const baseInterval = Math.max(0.3, 1.0 - ((this.state.currentSector - 1) * 0.1));
+            // Sector 1: 0.6s (was 1.0s)
+            // Scaling: -0.05s per sector until 0.2s clamp
+            const baseInterval = Math.max(0.2, 0.6 - ((this.state.currentSector - 1) * 0.05));
             this.spawnTimer = baseInterval;
 
             const angle = Math.random() * Math.PI * 2;
             const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + SETTINGS.WORLD.VIEW_PADDING;
 
             // Base Stats based on Level/Sector
-            let hp = SETTINGS.ENEMY.BASE_HP + (this.state.level * 5);
-            let speed = SETTINGS.ENEMY.BASE_SPEED + (this.state.level * 2);
+            let hp = SETTINGS.ENEMY.BASE_HP + (this.state.level * 8); // Buffed from 5
+            let speed = SETTINGS.ENEMY.BASE_SPEED + (this.state.level * 3); // Buffed from 2
             let size = 30; // Medium/Standard
             let color = undefined; // Undefined means use Sector Default
 
@@ -544,15 +586,18 @@ export class GameEngine {
                         this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.PLAYER, 2);
                     }
 
-                    if (e.isBoss) {
-                        this.state.bossCurrentHp = Math.max(0, e.hp);
-                    }
-
                     if (e.hp <= 0) {
                         e.markedForDeletion = true;
                         this.spawnExplosion(e.x, e.y, e.isBoss ? (e.bossColor || SETTINGS.COLORS.ENEMY) : this.state.sectorColors.enemyOutline, e.isBoss ? 50 : 15);
 
                         if (e.isBoss) {
+                            // BEACON DROP (Shield Kill)
+                            this.beacons.push({
+                                x: e.x,
+                                y: e.y,
+                                radius: 30,
+                                active: true
+                            });
                             this.nextSector();
                         } else {
                             this.gems.push({
@@ -577,7 +622,11 @@ export class GameEngine {
         });
 
         this.enemies.forEach(e => {
-            this.updateEnemyAI(e, dt);
+            if (e.isBoss) {
+                this.updateBossAI(e, dt);
+            } else {
+                this.updateEnemyAI(e, dt);
+            }
             e.frameCount++;
         });
 
@@ -633,9 +682,7 @@ export class GameEngine {
             p.y += p.vy * dt;
             // Remove of screen
             if (p.x < -100 || p.x > this.width + 100 || p.y < -100 || p.y > this.height + 100) {
-                // We can just filter them out later, let's mark them if we had a flag, 
-                // but simpler to filter in the consolidation block below or just splice.
-                // Let's filter below.
+                p.markedForDeletion = true;
             }
         });
 
@@ -645,12 +692,7 @@ export class GameEngine {
         this.gems = this.gems.filter(g => !g.markedForDeletion);
         this.particles = this.particles.filter(p => !p.markedForDeletion);
         this.damageTexts = this.damageTexts.filter(t => !t.markedForDeletion);
-
-        // Filter enemy projectiles that go off screen
-        this.enemyProjectiles = this.enemyProjectiles.filter(p =>
-            p.x > -100 && p.x < this.width + 100 &&
-            p.y > -100 && p.y < this.height + 100
-        );
+        this.enemyProjectiles = this.enemyProjectiles.filter(p => !p.markedForDeletion); // Consolidate filtering
         this.powerUps = this.powerUps.filter(p => p.life > 0);
     }
 
@@ -665,6 +707,240 @@ export class GameEngine {
         });
     }
 
+
+    private updateBossAI(boss: Enemy, dt: number) {
+        if (!boss.isBoss) return;
+
+        // FIX: Only initialize if properties are strictly undefined (preserve 0 values)
+        if (boss.attackTimer === undefined) boss.attackTimer = 0;
+        if (boss.angleOffset === undefined) boss.angleOffset = 0;
+        if (boss.attackState === undefined) boss.attackState = 0;
+
+        const dist = Math.sqrt(Math.pow(this.player.x - boss.x, 2) + Math.pow(this.player.y - boss.y, 2));
+        const angleToPlayer = Math.atan2(this.player.y - boss.y, this.player.x - boss.x);
+
+        // --- TYPE A: THE DREADNOUGHT (ID 10) ---
+        // "Bullet Hell": Slow, relentless, spiral shots
+        if (boss.spriteType === 10) {
+            // 1. Movement: Very slow tracking
+            boss.x += Math.cos(angleToPlayer) * boss.speed * 0.5 * dt;
+            boss.y += Math.sin(angleToPlayer) * boss.speed * 0.5 * dt;
+
+            // 2. Attack: Constant Spiral Fire
+            boss.attackTimer += dt;
+            const fireRate = boss.hp < boss.maxHp! * 0.5 ? 0.04 : 0.08; // Enrage: Faster fire (0.04s vs 0.08s)
+
+            if (boss.attackTimer > fireRate) {
+                boss.attackTimer = 0;
+                boss.angleOffset += 15 * (Math.PI / 180); // Rotate 15 degrees
+
+                // Fire Bullet
+                this.enemyProjectiles.push({
+                    x: boss.x,
+                    y: boss.y,
+                    vx: Math.cos(boss.angleOffset) * 200,
+                    vy: Math.sin(boss.angleOffset) * 200,
+                    size: 10,
+                    color: 'red',
+                    damage: 25
+                });
+
+                // Enrage: Dual Spiral
+                if (boss.hp < boss.maxHp! * 0.5) {
+                    this.enemyProjectiles.push({
+                        x: boss.x,
+                        y: boss.y,
+                        vx: Math.cos(boss.angleOffset + Math.PI) * 200,
+                        vy: Math.sin(boss.angleOffset + Math.PI) * 200,
+                        size: 10,
+                        color: 'orange',
+                        damage: 25
+                    });
+                }
+            }
+        }
+
+        // --- TYPE B: THE MOTHERSHIP (ID 11) ---
+        // "The Summoner": Kites player, spawns minions
+        else if (boss.spriteType === 11) {
+            // 1. Movement: Kiting (Maintain ~400px distance)
+            const kiteDist = 400;
+            if (dist < kiteDist) {
+                // Too close: Move AWAY
+                boss.x -= Math.cos(angleToPlayer) * boss.speed * dt;
+                boss.y -= Math.sin(angleToPlayer) * boss.speed * dt;
+            } else if (dist > kiteDist + 100) {
+                // Too far: Move CLOSER
+                boss.x += Math.cos(angleToPlayer) * boss.speed * dt;
+                boss.y += Math.sin(angleToPlayer) * boss.speed * dt;
+            }
+            // Else: Strafe/Hover (implied by doing nothing or adding sway later)
+
+            // 2. Attack: Spawn Swarmers
+            boss.attackTimer += dt;
+            if (boss.attackTimer > 3.0) {
+                boss.attackTimer = 0;
+
+                // Cap minions
+                if (this.enemies.length < 30) {
+                    for (let i = 0; i < 2; i++) {
+                        const spawnAngle = Math.random() * Math.PI * 2;
+                        this.enemies.push({
+                            x: boss.x + Math.cos(spawnAngle) * 50,
+                            y: boss.y + Math.sin(spawnAngle) * 50,
+                            hp: 10 + (this.state.level * 2), // Weak minions
+                            speed: 100,
+                            spriteType: 0, // Swarmer ID
+                            frameCount: 0,
+                            markedForDeletion: false,
+                            customSize: 20
+                        });
+                        this.spawnExplosion(boss.x, boss.y, 'purple', 5); // Spawn effect
+                    }
+                }
+            }
+
+            // 3. Defensive Shooting (Ring of 8)
+            if (!boss.shootCooldown) boss.shootCooldown = 0;
+            boss.shootCooldown -= dt;
+            if (boss.shootCooldown <= 0) {
+                boss.shootCooldown = 1.5; // Every 1.5s
+                for (let i = 0; i < 8; i++) {
+                    const angle = (i / 8) * Math.PI * 2;
+                    this.enemyProjectiles.push({
+                        x: boss.x,
+                        y: boss.y,
+                        vx: Math.cos(angle) * 200,
+                        vy: Math.sin(angle) * 200,
+                        size: 10,
+                        color: 'purple',
+                        damage: 25 // High Damage
+                    });
+                }
+            }
+        }
+
+        // --- TYPE C: THE INTERCEPTOR (ID 12) ---
+        // "The Duelist": Dash > Shoot > Dash
+        else if (boss.spriteType === 12) {
+            // State Machine
+            // 0: HOVER (Circling/Strafing) - 2s
+            // 1: TELEGRAPH (Charge Up) - 0.5s
+            // 2: DASH (Attack) - 0.3s
+            // 3: RECOVER (Shoot) - 0.5s
+
+            if (boss.attackState === 0) { // HOVER
+                // Strafe around player
+                const strafeAngle = angleToPlayer + Math.PI / 2;
+                boss.x += Math.cos(strafeAngle) * boss.speed * 1.5 * dt;
+                boss.y += Math.sin(strafeAngle) * boss.speed * 1.5 * dt;
+
+                // Pull closer if too far
+                if (dist > 300) {
+                    boss.x += Math.cos(angleToPlayer) * boss.speed * 0.5 * dt;
+                    boss.y += Math.sin(angleToPlayer) * boss.speed * 0.5 * dt;
+                }
+
+                boss.attackTimer += dt;
+                if (boss.attackTimer > 2.0) {
+                    boss.attackState = 1;
+                    boss.attackTimer = 0;
+                }
+
+            } else if (boss.attackState === 1) { // TELEGRAPH
+                // Stop and Flash
+                boss.bossColor = (Math.floor(Date.now() / 50) % 2 === 0) ? 'red' : 'white';
+
+                boss.attackTimer += dt;
+                if (boss.attackTimer > 0.5) {
+                    boss.attackState = 2;
+                    boss.attackTimer = 0;
+                    boss.bossColor = undefined; // Reset
+
+                    // Lock Dash Target
+                    const dashAngle = angleToPlayer; // Predict? Nah, clean dash is fair
+                    boss.vx = Math.cos(dashAngle) * 1000; // FAST (Increased from 800)
+                    boss.vy = Math.sin(dashAngle) * 1000;
+                }
+
+            } else if (boss.attackState === 2) { // DASH
+                boss.x += (boss.vx || 0) * dt;
+                boss.y += (boss.vy || 0) * dt;
+
+                // Trail
+                this.spawnExplosion(boss.x, boss.y, 'cyan', 2);
+
+                boss.attackTimer += dt;
+                if (boss.attackTimer > 0.3) {
+                    boss.attackState = 3;
+                    boss.attackTimer = 0;
+                    boss.vx = 0; boss.vy = 0; // Stop
+                }
+
+            } else if (boss.attackState === 3) { // RECOVER / SHOOT
+                if (boss.attackTimer === 0) {
+                    // Fire Spread on enter state
+                    [-0.3, 0, 0.3].forEach(offset => {
+                        this.enemyProjectiles.push({
+                            x: boss.x,
+                            y: boss.y,
+                            vx: Math.cos(angleToPlayer + offset) * 300,
+                            vy: Math.sin(angleToPlayer + offset) * 300,
+                            size: 12,
+                            color: 'cyan',
+                            damage: 25
+                        });
+                    });
+                }
+
+                boss.attackTimer += dt;
+                if (boss.attackTimer > 0.5) { // Rest for 0.5s (Reduced from 1.0s)
+                    boss.attackState = 0;
+                    boss.attackTimer = 0;
+                }
+            }
+        }
+
+        // --- BOSS REINFORCEMENTS (Infinite Elites) ---
+        if (!boss.reinforceTimer) boss.reinforceTimer = 0;
+        boss.reinforceTimer += dt;
+
+        if (boss.reinforceTimer > 4.0) { // Check every 4 seconds
+            boss.reinforceTimer = 0;
+
+            // Count active Elites (customSize > 40 signifies Elite)
+            const activeElites = this.enemies.filter(e => !e.isBoss && e.customSize && e.customSize >= 40).length;
+            const maxElites = 2 + this.state.currentSector; // Scaling cap
+
+            if (activeElites < maxElites) {
+                // Spawn Aggressive Elite
+                const angle = Math.random() * Math.PI * 2;
+                const spawnDist = 100;
+
+                // ARCHETYPE: INTERCEPTOR (ID 12) or SQUID (ID 0) for Speed
+                // We force them to be FASTER than the boss to avoid "clumping"
+                const eliteSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.9; // Fast!
+
+                this.enemies.push({
+                    x: boss.x + Math.cos(angle) * spawnDist,
+                    y: boss.y + Math.sin(angle) * spawnDist,
+                    hp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 4, // Tanky
+                    maxHp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 4,
+                    speed: eliteSpeed,
+                    spriteType: Math.random() > 0.5 ? 0 : 12, // Fast types
+                    frameCount: 0,
+                    isBoss: false,
+                    bossColor: '#FF4500', // Orange Red
+                    customSize: 45, // Big
+                    markedForDeletion: false,
+                    aiState: AIState.CHASING
+                });
+
+                // Visual feedback
+                this.spawnExplosion(boss.x, boss.y, '#FF4500', 5);
+            }
+        }
+    }
 
     private updateEnemyAI(e: Enemy, dt: number) {
         const distToPlayer = Math.sqrt(Math.pow(this.player.x - e.x, 2) + Math.pow(this.player.y - e.y, 2));
@@ -882,7 +1158,7 @@ export class GameEngine {
             this.beacons.push({
                 x, y, radius: 25, active: true
             });
-            this.spawnDamageText(x, y - 50, "BEACON DETECTED"); // Announcement
+            this.spawnDamageText(x, y - 50, "ANOMALY DETECTED"); // Announcement
         }
 
         this.obstacles.forEach(o => {
@@ -1024,9 +1300,16 @@ export class GameEngine {
 
                 if (dist < hitRadius) {
                     p.markedForDeletion = true;
-                    e.hp -= this.state.stats.damage;
-                    this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.BULLET, 3);
-                    this.spawnDamageText(e.x, e.y, this.state.stats.damage);
+
+                    if (e.shield && e.shield > 0) {
+                        e.shield -= this.state.stats.damage;
+                        this.spawnExplosion(e.x, e.y, 'cyan', 5); // Shield Hit
+                        this.spawnDamageText(e.x, e.y, "SHIELD");
+                    } else {
+                        e.hp -= this.state.stats.damage;
+                        this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.BULLET, 3);
+                        this.spawnDamageText(e.x, e.y, this.state.stats.damage);
+                    }
 
                     if (e.isBoss) {
                         this.state.bossCurrentHp = Math.max(0, e.hp);
@@ -1039,6 +1322,14 @@ export class GameEngine {
                         this.spawnPowerUp(e.x, e.y, e.isBoss); // 100% chance if boss, 5% otherwise
 
                         if (e.isBoss) {
+                            // BEACON DROP
+                            this.beacons.push({
+                                x: e.x,
+                                y: e.y,
+                                radius: 30,
+                                active: true
+                            });
+
                             this.triggerShake(15);
                             this.triggerFlash('white', 0.7);
                             this.nextSector();
@@ -1099,9 +1390,19 @@ export class GameEngine {
                 // Remove Projectile
                 this.enemyProjectiles.splice(i, 1);
 
+                // EXPLOSIVE DASH?
+                if (this.player.isDashing && this.player.invulnerabilityTimer > 0) {
+                    // Parry?
+                    this.spawnExplosion(this.player.x, this.player.y, 'cyan', 5);
+                    return;
+                }
+
+                if (this.player.invulnerabilityTimer > 0) return;
+
                 // Damage Player
-                this.state.stats.hp -= 10;
-                this.spawnDamageText(this.player.x, this.player.y, 10);
+                const dmg = p.damage || 10;
+                this.state.stats.hp -= dmg;
+                this.spawnDamageText(this.player.x, this.player.y, `-${dmg}`);
 
                 // Visual Feedback
                 this.spawnExplosion(this.player.x, this.player.y, 'red', 10);
@@ -1167,23 +1468,43 @@ export class GameEngine {
             const dist = Math.sqrt(dx * dx + dy * dy);
 
             if (dist < b.radius + SETTINGS.PLAYER.BASE_SIZE) {
-                // ACTIVATE BLOOD PACT
+                // ACTIVATE SINGULARITY
                 b.active = false;
+
+                // 1. FORCE MAGNETIZATION (Hard Wake-Up)
+                if (this.gems.length > 0) {
+                    this.gems.forEach(g => {
+                        g.magnetized = true; // Set flag
+
+                        // OPTIONAL: Manually nudge them towards player to ensure 'updateEntities' picks them up
+                        const dx = this.player.x - g.x;
+                        const dy = this.player.y - g.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        if (dist > 0) {
+                            // Apply a tiny velocity kick to wake up physics if needed
+                            g.x += (dx / dist) * 2;
+                            g.y += (dy / dist) * 2;
+                        }
+                    });
+                    console.log(`SINGULARITY: Magnetized ${this.gems.length} gems!`); // Debug log
+                }
 
                 // Cost: 30% current HP
                 const cost = Math.floor(this.state.stats.hp * 0.30);
                 this.state.stats.hp = Math.max(1, this.state.stats.hp - cost);
 
-                // Reward: +10% Damage
+                // Reward: +10% Damage & +1 Void Mass
                 this.state.stats.damage *= 1.10;
+                this.state.voidMass++;
+
 
                 // Feedback
                 this.triggerShake(10);
-                this.triggerFlash('red', 0.3);
-                this.spawnExplosion(b.x, b.y, 'gold', 20);
-                this.spawnDamageText(this.player.x, this.player.y - 60, "BLOOD PACT!");
-                this.spawnDamageText(this.player.x, this.player.y - 30, `-${cost} HP`);
-                this.spawnDamageText(this.player.x, this.player.y, "+10% DMG");
+                this.triggerFlash('purple', 0.3); // Purple for Void/Singularity
+                this.spawnExplosion(b.x, b.y, 'purple', 20);
+                this.spawnDamageText(this.player.x, this.player.y - 60, "SINGULARITY ABSORBED");
+                this.spawnDamageText(this.player.x, this.player.y - 30, `-${cost} INTEGRITY`);
+                this.spawnDamageText(this.player.x, this.player.y, "VOID MASS +1");
 
                 // Cleanup
                 this.beacons = this.beacons.filter(beacon => beacon !== b);
@@ -1434,6 +1755,31 @@ export class GameEngine {
                     const dx = this.player.x - e.x;
                     const dy = this.player.y - e.y;
                     const angleToPlayer = Math.atan2(dy, dx);
+
+                    // --- BOSS SHIELD RENDER ---
+                    if (e.shield && e.shield > 0) {
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.arc(0, 0, (e.customSize || 40) * 0.7, 0, Math.PI * 2);
+                        ctx.strokeStyle = `rgba(0, 255, 255, ${0.5 + Math.sin(this.state.timeSurvived * 10) * 0.5})`;
+                        ctx.lineWidth = 3;
+                        ctx.stroke();
+                        ctx.shadowColor = 'cyan';
+                        ctx.shadowBlur = 10;
+                        ctx.restore();
+
+                        // Shield Bar (Above HP Bar)
+                        const barWidth = 60;
+                        const barHeight = 6;
+                        const shieldPct = e.shield / (e.maxShield || 1);
+
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                        ctx.fillRect(-barWidth / 2, -50, barWidth, barHeight);
+
+                        ctx.fillStyle = 'cyan';
+                        ctx.fillRect(-barWidth / 2, -50, barWidth * shieldPct, barHeight);
+                    }
+
                     ctx.rotate(angleToPlayer);
 
                     const frameIndex = Math.floor(this.state.timeSurvived * 4) % 2;
@@ -1838,26 +2184,11 @@ export class GameEngine {
         ctx.fillText(`LVL ${this.state.level}`, barX, barY + 50);
 
         // FIX 4: BEACON PACTS INFO
-        // Count pacts? We don't track checks specifically, but we can track active buffs or infer?
-        // Wait, "PACTS: [X] (DMG +[Y]%)".
-        // Base damage is SETTINGS.WEAPON.DAMAGE.
-        // If we want to show strict pacts, we need to track how many beacons we took.
-        // We aren't tracking 'pactsTaken' in state.
-        // Calculate based on damage? currentDamage / baseDamage.
-        // Or just don't show exact count if we don't have it, but prompt says "PACTS: [X]".
-        // I should probably add `pactsTaken` to state or infer it.
-        // Since I can't easily change State interface without affecting other files potentially (though I can check `types.ts`), 
-        // I will deduce it:
-        // Pacts = round((currentDmg / baseDmg - 1) * 10). Assuming 10% per pact.
-        const baseDmg = SETTINGS.WEAPON.DAMAGE; // Assuming this is importable and constant
-        const currentDmg = this.state.stats.damage;
-        // Approximation:
-        const pctIncrease = ((currentDmg / baseDmg) - 1) * 100;
-        const pacts = Math.round(pctIncrease / 10);
-
+        const pacts = this.state.voidMass;
         if (pacts > 0) {
-            ctx.fillStyle = '#FFD700'; // Gold
-            ctx.fillText(`PACTS: ${pacts} (DMG +${Math.round(pctIncrease)}%)`, barX, barY + 70);
+            const pctIncrease = Math.round((Math.pow(1.10, pacts) - 1) * 100);
+            ctx.fillStyle = '#b19cd9'; // Light Purple
+            ctx.fillText(`VOID MASS: ${pacts} (DMG +${pctIncrease}%)`, barX, barY + 70);
         }
 
         // --- SECTOR INFO (Top Right) ---
