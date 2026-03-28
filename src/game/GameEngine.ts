@@ -66,7 +66,6 @@ export class GameEngine {
     private windVector: { x: number, y: number } = { x: 0, y: 0 };
     private onLevelUp: () => void;
     private onGameOver: () => void;
-    private lastBossType: number = -1;
 
     constructor(
         ctx: CanvasRenderingContext2D,
@@ -216,9 +215,6 @@ export class GameEngine {
         const typeIndex = (this.state.currentSector - 1) % bossOrder.length;
         const bossType = bossOrder[typeIndex];
 
-        console.log(`SPAWN BOSS: Sector ${sector} -> Type ${bossType} (Prev: ${this.lastBossType})`);
-        this.lastBossType = bossType; // Record for debug
-
         // 3. Boss Size Buffs
         let bossSize = 40;
         if (bossType === 10) { // Dreadnought
@@ -288,7 +284,7 @@ export class GameEngine {
                 customSize: 45, // Big
                 bossColor: '#FF4500', // Orange Red Glow
                 isBoss: false, // They are minions
-                shootCooldown: Math.random() * 2000,
+                shootCooldown: Math.random() * 2,
                 aiState: AIState.CHASING
             });
         }
@@ -344,6 +340,113 @@ export class GameEngine {
         // Warp Effect
         this.spawnExplosion(this.player.x, this.player.y, 'white', 50);
         this.spawnDamageText(this.player.x, this.player.y - 100, darkMatter); // Show reward text
+    }
+
+    private addGemDrop(x: number, y: number, value: number = 10) {
+        this.gems.push({
+            x,
+            y,
+            value,
+            markedForDeletion: false,
+            magnetized: false
+        });
+    }
+
+    private addBossBeacon(x: number, y: number) {
+        this.beacons.push({
+            x,
+            y,
+            radius: 30,
+            active: true
+        });
+    }
+
+    private syncBossState(enemy: Enemy) {
+        if (enemy.isBoss) {
+            this.state.bossCurrentHp = Math.max(0, enemy.hp);
+        }
+    }
+
+    private getEnemyDeathColor(enemy: Enemy): string {
+        return enemy.isBoss ? (enemy.bossColor || SETTINGS.COLORS.ENEMY) : this.state.sectorColors.enemyOutline;
+    }
+
+    private defeatEnemy(
+        enemy: Enemy,
+        options: {
+            spawnPowerUp?: boolean;
+            addGem?: boolean;
+            addKill?: boolean;
+            explosionColor?: string;
+            explosionCount?: number;
+        } = {}
+    ) {
+        if (enemy.markedForDeletion) return;
+
+        enemy.markedForDeletion = true;
+        this.syncBossState(enemy);
+
+        this.spawnExplosion(
+            enemy.x,
+            enemy.y,
+            options.explosionColor || this.getEnemyDeathColor(enemy),
+            options.explosionCount ?? (enemy.isBoss ? 50 : 15)
+        );
+
+        if (options.spawnPowerUp) {
+            this.spawnPowerUp(enemy.x, enemy.y, enemy.isBoss);
+        }
+
+        if (enemy.isBoss) {
+            this.addBossBeacon(enemy.x, enemy.y);
+            this.triggerShake(15);
+            this.triggerFlash('white', 0.7);
+            this.nextSector();
+            return;
+        }
+
+        if (options.addGem) {
+            this.addGemDrop(enemy.x, enemy.y);
+        }
+
+        if (options.addKill) {
+            this.state.kills++;
+        }
+    }
+
+    private applyDirectDamageToEnemy(
+        enemy: Enemy,
+        damage: number,
+        options: {
+            damageText?: number | string | false;
+            hitExplosionColor?: string;
+            hitExplosionCount?: number;
+            spawnPowerUpOnKill?: boolean;
+            addGemOnKill?: boolean;
+            addKillOnKill?: boolean;
+        } = {}
+    ) {
+        if (enemy.markedForDeletion) return;
+
+        enemy.hp -= damage;
+
+        if (options.hitExplosionColor) {
+            this.spawnExplosion(enemy.x, enemy.y, options.hitExplosionColor, options.hitExplosionCount ?? 3);
+        }
+
+        if (options.damageText !== false) {
+            this.spawnDamageText(enemy.x, enemy.y, options.damageText ?? damage);
+        }
+
+        this.syncBossState(enemy);
+
+        if (enemy.hp <= 0) {
+            this.defeatEnemy(enemy, {
+                spawnPowerUp: options.spawnPowerUpOnKill,
+                addGem: options.addGemOnKill,
+                addKill: options.addKillOnKill
+            });
+        }
     }
 
     private updatePlayer(dt: number) {
@@ -495,7 +598,7 @@ export class GameEngine {
                 customSize: size,
                 bossColor: color,
                 isBoss: false,
-                shootCooldown: 2000 + Math.random() * 3000,
+                shootCooldown: 2 + Math.random() * 3,
                 aiState: AIState.CHASING,
                 stateTimer: 0,
                 chargeTimer: 0
@@ -579,32 +682,15 @@ export class GameEngine {
                 const radiusSq = this.state.stats.shieldRadius * this.state.stats.shieldRadius;
 
                 if (distSq < radiusSq) {
-                    e.hp -= dmgPerTick;
+                    this.applyDirectDamageToEnemy(e, dmgPerTick, {
+                        damageText: false,
+                        addGemOnKill: true,
+                        addKillOnKill: true
+                    });
 
                     // Visual feedback
                     if (Math.random() > 0.7) {
                         this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.PLAYER, 2);
-                    }
-
-                    if (e.hp <= 0) {
-                        e.markedForDeletion = true;
-                        this.spawnExplosion(e.x, e.y, e.isBoss ? (e.bossColor || SETTINGS.COLORS.ENEMY) : this.state.sectorColors.enemyOutline, e.isBoss ? 50 : 15);
-
-                        if (e.isBoss) {
-                            // BEACON DROP (Shield Kill)
-                            this.beacons.push({
-                                x: e.x,
-                                y: e.y,
-                                radius: 30,
-                                active: true
-                            });
-                            this.nextSector();
-                        } else {
-                            this.gems.push({
-                                x: e.x, y: e.y, value: 10, markedForDeletion: false, magnetized: false
-                            });
-                            this.state.kills++;
-                        }
                     }
                 }
             });
@@ -680,8 +766,7 @@ export class GameEngine {
         this.enemyProjectiles.forEach(p => {
             p.x += p.vx * dt;
             p.y += p.vy * dt;
-            // Remove of screen
-            if (p.x < -100 || p.x > this.width + 100 || p.y < -100 || p.y > this.height + 100) {
+            if (!this.isWorldPointNearCamera(p.x, p.y, 200)) {
                 p.markedForDeletion = true;
             }
         });
@@ -801,7 +886,7 @@ export class GameEngine {
             }
 
             // 3. Defensive Shooting (Ring of 8)
-            if (!boss.shootCooldown) boss.shootCooldown = 0;
+            if (boss.shootCooldown === undefined) boss.shootCooldown = 0;
             boss.shootCooldown -= dt;
             if (boss.shootCooldown <= 0) {
                 boss.shootCooldown = 1.5; // Every 1.5s
@@ -1048,12 +1133,13 @@ export class GameEngine {
     private handleEnemyShooting(dt: number) {
         this.enemies.forEach(e => {
             if (e.markedForDeletion) return;
+            if (e.isBoss) return;
 
             // CheckArchetype: Swarmers (size 20) don't shoot.
             if (e.customSize && e.customSize <= 25) return;
 
             if (e.shootCooldown !== undefined) {
-                e.shootCooldown -= dt * 1000; // ms
+                e.shootCooldown -= dt;
                 if (e.shootCooldown <= 0) {
                     // SHOOT
                     const dx = this.player.x - e.x;
@@ -1071,7 +1157,7 @@ export class GameEngine {
                     });
 
                     // Reset Cooldown
-                    e.shootCooldown = 3000 + Math.random() * 2000;
+                    e.shootCooldown = 3 + Math.random() * 2;
                 }
             }
         });
@@ -1173,11 +1259,10 @@ export class GameEngine {
                         const dx = e.x - o.x;
                         const dy = e.y - o.y;
                         if (Math.sqrt(dx * dx + dy * dy) < 150) {
-                            e.hp -= 100;
-                            if (e.hp <= 0) {
-                                e.markedForDeletion = true;
-                                this.spawnPowerUp(e.x, e.y);
-                            }
+                            this.applyDirectDamageToEnemy(e, 100, {
+                                damageText: false,
+                                spawnPowerUpOnKill: true
+                            });
                         }
                     });
                 }
@@ -1294,51 +1379,24 @@ export class GameEngine {
                 const dy = p.y - e.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
 
-                // Use custom size for boss if available
-                // @ts-ignore
-                const hitRadius = e.isBoss ? (e.customSize || SETTINGS.ENEMY.SIZE) : SETTINGS.ENEMY.SIZE;
+                const hitRadius = this.getEnemyCollisionRadius(e);
 
                 if (dist < hitRadius) {
                     p.markedForDeletion = true;
 
                     if (e.shield && e.shield > 0) {
-                        e.shield -= this.state.stats.damage;
+                        e.shield = Math.max(0, e.shield - this.state.stats.damage);
                         this.spawnExplosion(e.x, e.y, 'cyan', 5); // Shield Hit
                         this.spawnDamageText(e.x, e.y, "SHIELD");
                     } else {
-                        e.hp -= this.state.stats.damage;
-                        this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.BULLET, 3);
-                        this.spawnDamageText(e.x, e.y, this.state.stats.damage);
-                    }
-
-                    if (e.isBoss) {
-                        this.state.bossCurrentHp = Math.max(0, e.hp);
-                    }
-
-                    if (e.hp <= 0) {
-                        e.markedForDeletion = true;
-                        this.spawnExplosion(e.x, e.y, e.isBoss ? (e.bossColor || SETTINGS.COLORS.ENEMY) : this.state.sectorColors.enemyOutline, e.isBoss ? 50 : 15);
-
-                        this.spawnPowerUp(e.x, e.y, e.isBoss); // 100% chance if boss, 5% otherwise
-
-                        if (e.isBoss) {
-                            // BEACON DROP
-                            this.beacons.push({
-                                x: e.x,
-                                y: e.y,
-                                radius: 30,
-                                active: true
-                            });
-
-                            this.triggerShake(15);
-                            this.triggerFlash('white', 0.7);
-                            this.nextSector();
-                        } else {
-                            this.gems.push({
-                                x: e.x, y: e.y, value: 10, markedForDeletion: false, magnetized: false
-                            });
-                            this.state.kills++;
-                        }
+                        this.applyDirectDamageToEnemy(e, this.state.stats.damage, {
+                            damageText: this.state.stats.damage,
+                            hitExplosionColor: SETTINGS.COLORS.BULLET,
+                            hitExplosionCount: 3,
+                            spawnPowerUpOnKill: true,
+                            addGemOnKill: true,
+                            addKillOnKill: true
+                        });
                     }
                 }
             });
@@ -1350,20 +1408,18 @@ export class GameEngine {
             const dy = e.y - this.player.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            // @ts-ignore
-            const enemyRadius = e.isBoss ? (e.customSize || 30) : SETTINGS.ENEMY.SIZE;
+            const enemyRadius = this.getEnemyCollisionRadius(e);
 
             if (dist < SETTINGS.PLAYER.BASE_SIZE + enemyRadius - 5) {
                 // KINETIC DAMAGE (Dash Kill)
                 if (this.player.isDashing && !e.isBoss) {
-                    e.hp = 0;
-                    e.markedForDeletion = true;
-                    this.spawnExplosion(e.x, e.y, 'cyan', 20); // Kinetic burst
-                    this.triggerShake(5);
-                    this.gems.push({
-                        x: e.x, y: e.y, value: 10, markedForDeletion: false, magnetized: false
+                    this.defeatEnemy(e, {
+                        addGem: true,
+                        addKill: true,
+                        explosionColor: 'cyan',
+                        explosionCount: 20
                     });
-                    this.state.kills++;
+                    this.triggerShake(5);
                     return; // Skip damage to player
                 }
 
@@ -1446,13 +1502,16 @@ export class GameEngine {
                         this.triggerShake(20);
                         this.enemies.forEach(e => {
                             if (!e.isBoss) {
-                                e.hp = 0;
-                                e.markedForDeletion = true;
-                                this.spawnExplosion(e.x, e.y, 'red', 10);
-                                this.gems.push({ x: e.x, y: e.y, value: 10, markedForDeletion: false, magnetized: false });
+                                this.defeatEnemy(e, {
+                                    addGem: true,
+                                    explosionColor: 'red',
+                                    explosionCount: 10
+                                });
                             } else {
-                                e.hp -= 500; // Big damage to boss
-                                this.spawnDamageText(e.x, e.y, 500);
+                                this.applyDirectDamageToEnemy(e, 500, {
+                                    damageText: 500,
+                                    spawnPowerUpOnKill: true
+                                });
                             }
                         });
                         break;
@@ -1486,7 +1545,6 @@ export class GameEngine {
                             g.y += (dy / dist) * 2;
                         }
                     });
-                    console.log(`SINGULARITY: Magnetized ${this.gems.length} gems!`); // Debug log
                 }
 
                 // Cost: 30% current HP
@@ -1519,8 +1577,6 @@ export class GameEngine {
         }
 
         // EMERGENCY FALLBACK LOGIC
-        // 1. Verify Import
-        // @ts-ignore
         if (!SPRITES || typeof SPRITES !== 'object') {
             console.error('SPRITES import missing or invalid', SPRITES);
             return this.createFallbackSprite('red');
@@ -1744,8 +1800,7 @@ export class GameEngine {
         }));
 
         this.enemies.forEach(e => {
-            // @ts-ignore
-            const size = e.customSize || SETTINGS.ENEMY.SIZE || 40;
+            const size = this.getEnemyRenderSize(e);
             this.drawEntity(e.x, e.y, () => {
 
                 // --- TELEGRAPHING: PRE-DRAW ---
@@ -2236,6 +2291,27 @@ export class GameEngine {
 
         return screenX >= -100 && screenX <= visibleW + 100 &&
             screenY >= -100 && screenY <= visibleH + 100;
+    }
+
+    private isWorldPointNearCamera(x: number, y: number, padding: number): boolean {
+        const visibleW = this.width / this.CAMERA_ZOOM;
+        const visibleH = this.height / this.CAMERA_ZOOM;
+        const centerX = visibleW / 2;
+        const centerY = visibleH / 2;
+
+        const screenX = x - this.player.x + centerX;
+        const screenY = y - this.player.y + centerY;
+
+        return screenX >= -padding && screenX <= visibleW + padding &&
+            screenY >= -padding && screenY <= visibleH + padding;
+    }
+
+    private getEnemyRenderSize(enemy: Enemy): number {
+        return enemy.customSize ?? SETTINGS.ENEMY.SIZE;
+    }
+
+    private getEnemyCollisionRadius(enemy: Enemy): number {
+        return this.getEnemyRenderSize(enemy);
     }
 
     private drawEntity(worldX: number, worldY: number, drawFn: () => void) {

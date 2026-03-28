@@ -46,7 +46,7 @@ export interface Enemy {
     isBoss?: boolean;
     bossColor?: string;
     customSize?: number;
-    shootCooldown?: number; // Time until next shot
+    shootCooldown?: number; // Seconds until next shot
     aiState?: AIState;
     stateTimer?: number;
     chargeTimer?: number;

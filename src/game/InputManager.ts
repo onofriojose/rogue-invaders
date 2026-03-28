@@ -8,6 +8,7 @@ export class InputManager {
     private startPos: Vector2 = { x: 0, y: 0 };
     private currentPos: Vector2 = { x: 0, y: 0 };
     private keys: { [key: string]: boolean } = {};
+    private usingPointer: boolean = false;
 
     // Callbacks for visual updates
     private onKnobMove: ((x: number, y: number) => void) | null = null;
@@ -110,6 +111,7 @@ export class InputManager {
     }
 
     private startInteraction(x: number, y: number) {
+        this.usingPointer = true;
         this.active = true;
         this.startPos = { x, y };
         this.currentPos = { x, y };
@@ -149,9 +151,11 @@ export class InputManager {
     }
 
     private endInteraction() {
+        this.usingPointer = false;
         this.active = false;
+        this.startPos = { x: 0, y: 0 };
+        this.currentPos = { x: 0, y: 0 };
         this.vector = { x: 0, y: 0 };
-        // Check if keys are still pressed to keep active
         this.updateKeyVector();
         if (this.onJoystickHide) this.onJoystickHide();
     }
@@ -170,9 +174,7 @@ export class InputManager {
     }
 
     private updateKeyVector() {
-        // If touch/mouse is active, ignore keys for vector (or combine? simpler to prefer touch)
-        // But if touch is NOT active, use keys.
-        if (this.active && (this.startPos.x !== 0 || this.startPos.y !== 0)) return;
+        if (this.usingPointer) return;
 
         let dx = 0;
         let dy = 0;
@@ -183,13 +185,11 @@ export class InputManager {
         if (this.keys['KeyD'] || this.keys['ArrowRight']) dx += 1;
 
         if (dx !== 0 || dy !== 0) {
-            // Normalize
             const length = Math.sqrt(dx * dx + dy * dy);
             this.vector = { x: dx / length, y: dy / length };
             this.active = true;
         } else {
-            // Only stop if we were using keys (no touch)
-            if (this.active && this.startPos.x === 0 && this.startPos.y === 0) {
+            if (this.active) {
                 this.active = false;
                 this.vector = { x: 0, y: 0 };
             }
