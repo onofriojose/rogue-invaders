@@ -60,6 +60,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 - 2026-03-28 Batch 1 complete: `REF-003`, `BUG-101`, `BUG-102`, `BUG-103`, `BUG-104`
 - 2026-03-28 Batch 2 complete: `BUG-105`
 - 2026-03-28 Batch 3 complete: extracted `src/game/systems/CombatSystem.ts` and `src/game/systems/BossSystem.ts`; `GameEngine.ts` now delegates combat and boss responsibilities through typed context wrappers
+- 2026-03-28 Batch 4 complete: extracted `src/game/systems/CollisionSystem.ts` and `src/game/systems/ProjectileSystem.ts`; tuned early-game spawn pacing and enemy firing cadence after manual playtest feedback
 
 ## Phase 0: Baseline and Guardrails
 
@@ -236,7 +237,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: L
-- Status: in progress
+- Status: done
 - Depends on: ENG-201
 - Files:
   - `src/game/systems/CombatSystem.ts`

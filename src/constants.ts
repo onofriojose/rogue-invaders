@@ -15,7 +15,14 @@ export const SETTINGS = {
     },
     ENEMY: {
         SPAWN_RATE_START: 1.5,
-        SPAWN_RATE_MIN: 0.1,
+        SPAWN_RATE_MIN: 0.55,
+        SPAWN_RATE_STEP: 0.12,
+        EARLY_GAME_DURATION: 60,
+        EARLY_GAME_EXTRA_DELAY: 0.75,
+        SHOOT_COOLDOWN_INITIAL_MIN: 5.5,
+        SHOOT_COOLDOWN_INITIAL_MAX: 7.5,
+        SHOOT_COOLDOWN_REPEAT_MIN: 4.5,
+        SHOOT_COOLDOWN_REPEAT_MAX: 6.5,
         BASE_SPEED: 100,
         BASE_HP: 30,
         SIZE: 50

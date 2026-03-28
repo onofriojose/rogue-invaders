@@ -1,11 +1,11 @@
 import { SETTINGS } from '../constants';
-import { GameState, Player, Enemy, Projectile, Gem, Particle, GameStats, Upgrade, DamageText, EnemyProjectile, AIState, Beacon } from '../types';
+import { GameState, Player, Enemy, Projectile, Gem, Particle, GameStats, Upgrade, DamageText, EnemyProjectile, AIState, Beacon, Obstacle } from '../types';
 import { InputManager } from './InputManager';
 import { SPRITES } from './EnemySprites';
 import { BossSystem, BossSystemContext } from './systems/BossSystem';
 import { CombatSystem, CombatSystemContext, EnemyDamageOptions, EnemyDefeatOptions } from './systems/CombatSystem';
-
-import { Obstacle } from '../types';
+import { CollisionSystem, CollisionSystemContext, getEnemyRenderSize } from './systems/CollisionSystem';
+import { ProjectileSystem, ProjectileSystemContext } from './systems/ProjectileSystem';
 
 
 
@@ -53,6 +53,8 @@ export class GameEngine {
     private readonly CAMERA_ZOOM: number = 0.6;
     private readonly combatSystem: CombatSystem = new CombatSystem();
     private readonly bossSystem: BossSystem = new BossSystem();
+    private readonly collisionSystem: CollisionSystem = new CollisionSystem();
+    private readonly projectileSystem: ProjectileSystem = new ProjectileSystem();
 
     // Internals
     private spawnTimer: number = 0;
@@ -292,6 +294,35 @@ export class GameEngine {
         };
     }
 
+    private getCollisionContext(): CollisionSystemContext {
+        return {
+            state: this.state,
+            player: this.player,
+            enemies: this.enemies,
+            projectiles: this.projectiles,
+            enemyProjectiles: this.enemyProjectiles,
+            obstacles: this.obstacles,
+            spawnExplosion: (x, y, color, count) => this.spawnExplosion(x, y, color, count),
+            spawnDamageText: (x, y, damage) => this.spawnDamageText(x, y, damage),
+            triggerShake: (amount) => this.triggerShake(amount),
+            triggerFlash: (color, intensity) => this.triggerFlash(color, intensity),
+            onGameOver: () => this.onGameOver(),
+            defeatEnemy: (enemy, options) => this.defeatEnemy(enemy, options),
+            applyDirectDamageToEnemy: (enemy, damage, options) => this.applyDirectDamageToEnemy(enemy, damage, options)
+        };
+    }
+
+    private getProjectileContext(): ProjectileSystemContext {
+        return {
+            player: this.player,
+            projectiles: this.projectiles,
+            enemyProjectiles: this.enemyProjectiles,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM
+        };
+    }
+
     private defeatEnemy(enemy: Enemy, options: EnemyDefeatOptions = {}) {
         this.combatSystem.defeatEnemy(this.getCombatContext(), enemy, options);
     }
@@ -376,6 +407,22 @@ export class GameEngine {
         this.player.y += this.player.vy * dt;
     }
 
+    private getEnemySpawnInterval(): number {
+        const sectorBaseInterval = Math.max(
+            SETTINGS.ENEMY.SPAWN_RATE_MIN,
+            SETTINGS.ENEMY.SPAWN_RATE_START - ((this.state.currentSector - 1) * SETTINGS.ENEMY.SPAWN_RATE_STEP)
+        );
+        const earlyGameProgress = Math.min(1, this.state.timeSurvived / SETTINGS.ENEMY.EARLY_GAME_DURATION);
+        const earlyGameDelay = (1 - earlyGameProgress) * SETTINGS.ENEMY.EARLY_GAME_EXTRA_DELAY;
+
+        return sectorBaseInterval + earlyGameDelay;
+    }
+
+    private getInitialEnemyShootCooldown(): number {
+        return SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN +
+            Math.random() * (SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MAX - SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN);
+    }
+
     private handleSpawning(dt: number) {
         // 3. Max Enemy Cap
         const enemyCap = 20 + (this.state.currentSector * 5);
@@ -383,11 +430,7 @@ export class GameEngine {
 
         this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
-            // 2. Nerf Initial Spawn Rate & Scale (ADJUSTED: 2x Faster Start)
-            // Sector 1: 0.6s (was 1.0s)
-            // Scaling: -0.05s per sector until 0.2s clamp
-            const baseInterval = Math.max(0.2, 0.6 - ((this.state.currentSector - 1) * 0.05));
-            this.spawnTimer = baseInterval;
+            this.spawnTimer = this.getEnemySpawnInterval();
 
             const angle = Math.random() * Math.PI * 2;
             const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + SETTINGS.WORLD.VIEW_PADDING;
@@ -449,7 +492,7 @@ export class GameEngine {
                 customSize: size,
                 bossColor: color,
                 isBoss: false,
-                shootCooldown: 2 + Math.random() * 3,
+                shootCooldown: this.getInitialEnemyShootCooldown(),
                 aiState: AIState.CHASING,
                 stateTimer: 0,
                 chargeTimer: 0
@@ -466,12 +509,9 @@ export class GameEngine {
     }
 
     private updateEntities(dt: number) {
-        this.projectiles.forEach(p => {
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            p.life -= dt;
-            if (p.life <= 0) p.markedForDeletion = true;
-        });
+        const updatedProjectiles = this.projectileSystem.updateProjectiles(this.getProjectileContext(), dt);
+        this.projectiles = updatedProjectiles.projectiles;
+        this.enemyProjectiles = updatedProjectiles.enemyProjectiles;
 
         this.enemies.forEach(e => {
             if (e.isBoss) {
@@ -528,22 +568,11 @@ export class GameEngine {
             if (t.life <= 0) t.markedForDeletion = true;
         });
 
-        // Update Enemy Projectiles
-        this.enemyProjectiles.forEach(p => {
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
-            if (!this.isWorldPointNearCamera(p.x, p.y, 200)) {
-                p.markedForDeletion = true;
-            }
-        });
-
         // Filter
-        this.projectiles = this.projectiles.filter(p => !p.markedForDeletion);
         this.enemies = this.enemies.filter(e => !e.markedForDeletion);
         this.gems = this.gems.filter(g => !g.markedForDeletion);
         this.particles = this.particles.filter(p => !p.markedForDeletion);
         this.damageTexts = this.damageTexts.filter(t => !t.markedForDeletion);
-        this.enemyProjectiles = this.enemyProjectiles.filter(p => !p.markedForDeletion); // Consolidate filtering
         this.powerUps = this.powerUps.filter(p => p.life > 0);
     }
 
@@ -813,267 +842,97 @@ export class GameEngine {
     }
 
     private checkCollisions() {
-        // Projectiles vs Obstacles
-        this.projectiles.forEach(p => {
-            if (p.markedForDeletion) return;
-            this.obstacles.forEach(o => {
-                if (o.markedForDeletion || p.markedForDeletion) return;
-                const dx = p.x - o.x;
-                const dy = p.y - o.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
+        this.collisionSystem.handleCoreCollisions(this.getCollisionContext());
+        this.checkPowerUpCollisions();
+        this.checkBeaconCollisions();
+    }
 
-                if (dist < o.size + p.size) {
-                    // FIX: Bullets DESTROY asteroids
-                    p.markedForDeletion = true;
+    private checkPowerUpCollisions() {
+        this.powerUps.forEach(powerUp => {
+            if (powerUp.life <= 0) return;
 
-                    if (!o.isExploding) {
-                        o.isExploding = true;
-                        o.explodeTimer = 0.1; // Explode almost instantly
-
-                        // Visual Feedback
-                        this.spawnExplosion(o.x, o.y, 'orange', 15);
-                        this.triggerShake(2);
-                    }
-                }
-            });
-        });
-
-        // Player vs Obstacles (Bump or Dash Destroy)
-        this.obstacles.forEach(o => {
-            if (o.markedForDeletion) return;
-            const dx = this.player.x - o.x;
-            const dy = this.player.y - o.y;
+            const dx = powerUp.x - this.player.x;
+            const dy = powerUp.y - this.player.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
 
-            if (dist < o.size + SETTINGS.PLAYER.BASE_SIZE) {
-                // If Dashing -> Destroy Asteroid
-                if (this.player.isDashing) {
-                    o.isExploding = true;
-                    o.explodeTimer = 0.5;
-                    this.spawnExplosion(o.x, o.y, 'orange', 20);
-                    this.triggerShake(5);
-                    // FIX 3: No healing, just destroy and keep moving
-                    // this.state.stats.hp = Math.min(this.state.stats.hp + 1, this.state.stats.maxHp); 
-                    return;
-                }
+            if (dist >= powerUp.size + SETTINGS.PLAYER.BASE_SIZE) return;
 
-                // Normal Collision -> Bounce (Physics Bumper Car)
-                const angle = Math.atan2(dy, dx);
-                const pushDist = o.size + SETTINGS.PLAYER.BASE_SIZE - dist + 2;
-                this.player.x += Math.cos(angle) * pushDist;
-                this.player.y += Math.sin(angle) * pushDist;
+            powerUp.life = 0;
+            this.spawnExplosion(powerUp.x, powerUp.y, powerUp.color, 10);
+            this.spawnDamageText(this.player.x, this.player.y - 50, 0);
 
-                // Bounce velocity (Reverse & Dampen)
-                this.player.vx *= -0.5;
-                this.player.vy *= -0.5;
-
-                // FIX 3: Small damage, Rock Intact
-                this.state.stats.hp = Math.max(0, this.state.stats.hp - 1);
-                this.triggerShake(5);
-
-                // FIX 1: PLAYER IMMORTALITY CHECK
-                if (this.state.stats.hp <= 0) {
-                    this.onGameOver();
-                }
-            }
-        });
-
-        // Projectiles vs Enemies
-        this.projectiles.forEach(p => {
-            this.enemies.forEach(e => {
-                if (e.markedForDeletion || p.markedForDeletion) return;
-                const dx = p.x - e.x;
-                const dy = p.y - e.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                const hitRadius = this.getEnemyCollisionRadius(e);
-
-                if (dist < hitRadius) {
-                    p.markedForDeletion = true;
-
-                    if (e.shield && e.shield > 0) {
-                        e.shield = Math.max(0, e.shield - this.state.stats.damage);
-                        this.spawnExplosion(e.x, e.y, 'cyan', 5); // Shield Hit
-                        this.spawnDamageText(e.x, e.y, "SHIELD");
-                    } else {
-                        this.applyDirectDamageToEnemy(e, this.state.stats.damage, {
-                            damageText: this.state.stats.damage,
-                            hitExplosionColor: SETTINGS.COLORS.BULLET,
-                            hitExplosionCount: 3,
-                            spawnPowerUpOnKill: true,
-                            addGemOnKill: true,
-                            addKillOnKill: true
-                        });
-                    }
-                }
-            });
-        });
-
-        // Enemies vs Player
-        this.enemies.forEach(e => {
-            const dx = e.x - this.player.x;
-            const dy = e.y - this.player.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            const enemyRadius = this.getEnemyCollisionRadius(e);
-
-            if (dist < SETTINGS.PLAYER.BASE_SIZE + enemyRadius - 5) {
-                // KINETIC DAMAGE (Dash Kill)
-                if (this.player.isDashing && !e.isBoss) {
-                    this.defeatEnemy(e, {
-                        addGem: true,
-                        addKill: true,
-                        explosionColor: 'cyan',
-                        explosionCount: 20
-                    });
-                    this.triggerShake(5);
-                    return; // Skip damage to player
-                }
-
-                if (this.player.invulnerabilityTimer > 0) return; // I-Frames
-
-                this.state.stats.hp -= 0.5;
-                this.triggerShake(10);
-                this.triggerFlash('red', 0.5);
-                if (this.state.stats.hp <= 0) {
-                    this.onGameOver();
-                }
-            }
-        });
-
-        // Player vs Enemy Projectiles
-        for (let i = this.enemyProjectiles.length - 1; i >= 0; i--) {
-            const p = this.enemyProjectiles[i];
-            const dx = p.x - this.player.x;
-            const dy = p.y - this.player.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            // Hitbox: Player radius (~20-25) + Projectile radius (~4-5)
-            if (dist < 25) {
-                // Remove Projectile
-                this.enemyProjectiles.splice(i, 1);
-
-                // EXPLOSIVE DASH?
-                if (this.player.isDashing && this.player.invulnerabilityTimer > 0) {
-                    // Parry?
-                    this.spawnExplosion(this.player.x, this.player.y, 'cyan', 5);
-                    return;
-                }
-
-                if (this.player.invulnerabilityTimer > 0) return;
-
-                // Damage Player
-                const dmg = p.damage || 10;
-                this.state.stats.hp -= dmg;
-                this.spawnDamageText(this.player.x, this.player.y, `-${dmg}`);
-
-                // Visual Feedback
-                this.spawnExplosion(this.player.x, this.player.y, 'red', 10);
-                this.triggerShake(5);
-                this.triggerFlash('red', 0.2);
-
-                if (this.state.stats.hp <= 0) {
-                    this.onGameOver();
-                }
-            }
-        }
-
-        // PowerUps vs Player
-        this.powerUps.forEach(p => {
-            if (p.life <= 0) return;
-            const dx = p.x - this.player.x;
-            const dy = p.y - this.player.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            if (dist < p.size + SETTINGS.PLAYER.BASE_SIZE) {
-                p.life = 0; // Collect
-                this.spawnExplosion(p.x, p.y, p.color, 10);
-                this.spawnDamageText(this.player.x, this.player.y - 50, 0); // Hack to just show something? No, let's not show "0"
-                // Actually, let's play a sound or different text maybe? 
-                // For now, text:
-
-                switch (p.type) {
-                    case 'HEALTH':
-                        this.state.stats.hp = Math.min(this.state.stats.hp + 20, this.state.stats.maxHp);
-                        this.spawnDamageText(this.player.x, this.player.y - 50, 20); // Show "20" (Heal)
-                        // Maybe color green? The text is white/black stroke.
-                        break;
-                    case 'RAPID_FIRE':
-                        this.rapidFireTimer = 10;
-                        break;
-                    case 'SPREAD_SHOT':
-                        this.spreadShotTimer = 10;
-                        break;
-                    case 'NUKE':
-                        this.triggerFlash('white', 1.0);
-                        this.triggerShake(20);
-                        this.enemies.forEach(e => {
-                            if (!e.isBoss) {
-                                this.defeatEnemy(e, {
-                                    addGem: true,
-                                    explosionColor: 'red',
-                                    explosionCount: 10
-                                });
-                            } else {
-                                this.applyDirectDamageToEnemy(e, 500, {
-                                    damageText: 500,
-                                    spawnPowerUpOnKill: true
-                                });
-                            }
-                        });
-                        break;
-                }
-            }
-        });
-
-        // 6. Player vs Beacons
-        this.beacons.forEach(b => {
-            if (!b.active) return;
-            const dx = b.x - this.player.x;
-            const dy = b.y - this.player.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-
-            if (dist < b.radius + SETTINGS.PLAYER.BASE_SIZE) {
-                // ACTIVATE SINGULARITY
-                b.active = false;
-
-                // 1. FORCE MAGNETIZATION (Hard Wake-Up)
-                if (this.gems.length > 0) {
-                    this.gems.forEach(g => {
-                        g.magnetized = true; // Set flag
-
-                        // OPTIONAL: Manually nudge them towards player to ensure 'updateEntities' picks them up
-                        const dx = this.player.x - g.x;
-                        const dy = this.player.y - g.y;
-                        const dist = Math.sqrt(dx * dx + dy * dy);
-                        if (dist > 0) {
-                            // Apply a tiny velocity kick to wake up physics if needed
-                            g.x += (dx / dist) * 2;
-                            g.y += (dy / dist) * 2;
+            switch (powerUp.type) {
+                case 'HEALTH':
+                    this.state.stats.hp = Math.min(this.state.stats.hp + 20, this.state.stats.maxHp);
+                    this.spawnDamageText(this.player.x, this.player.y - 50, 20);
+                    break;
+                case 'RAPID_FIRE':
+                    this.rapidFireTimer = 10;
+                    break;
+                case 'SPREAD_SHOT':
+                    this.spreadShotTimer = 10;
+                    break;
+                case 'NUKE':
+                    this.triggerFlash('white', 1.0);
+                    this.triggerShake(20);
+                    this.enemies.forEach(enemy => {
+                        if (!enemy.isBoss) {
+                            this.defeatEnemy(enemy, {
+                                addGem: true,
+                                explosionColor: 'red',
+                                explosionCount: 10
+                            });
+                        } else {
+                            this.applyDirectDamageToEnemy(enemy, 500, {
+                                damageText: 500,
+                                spawnPowerUpOnKill: true
+                            });
                         }
                     });
-                }
-
-                // Cost: 30% current HP
-                const cost = Math.floor(this.state.stats.hp * 0.30);
-                this.state.stats.hp = Math.max(1, this.state.stats.hp - cost);
-
-                // Reward: +10% Damage & +1 Void Mass
-                this.state.stats.damage *= 1.10;
-                this.state.voidMass++;
-
-
-                // Feedback
-                this.triggerShake(10);
-                this.triggerFlash('purple', 0.3); // Purple for Void/Singularity
-                this.spawnExplosion(b.x, b.y, 'purple', 20);
-                this.spawnDamageText(this.player.x, this.player.y - 60, "SINGULARITY ABSORBED");
-                this.spawnDamageText(this.player.x, this.player.y - 30, `-${cost} INTEGRITY`);
-                this.spawnDamageText(this.player.x, this.player.y, "VOID MASS +1");
-
-                // Cleanup
-                this.beacons = this.beacons.filter(beacon => beacon !== b);
+                    break;
             }
+        });
+    }
+
+    private checkBeaconCollisions() {
+        this.beacons.forEach(beacon => {
+            if (!beacon.active) return;
+
+            const dx = beacon.x - this.player.x;
+            const dy = beacon.y - this.player.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist >= beacon.radius + SETTINGS.PLAYER.BASE_SIZE) return;
+
+            beacon.active = false;
+
+            if (this.gems.length > 0) {
+                this.gems.forEach(gem => {
+                    gem.magnetized = true;
+
+                    const gemDx = this.player.x - gem.x;
+                    const gemDy = this.player.y - gem.y;
+                    const gemDist = Math.sqrt(gemDx * gemDx + gemDy * gemDy);
+                    if (gemDist > 0) {
+                        gem.x += (gemDx / gemDist) * 2;
+                        gem.y += (gemDy / gemDist) * 2;
+                    }
+                });
+            }
+
+            const cost = Math.floor(this.state.stats.hp * 0.30);
+            this.state.stats.hp = Math.max(1, this.state.stats.hp - cost);
+            this.state.stats.damage *= 1.10;
+            this.state.voidMass++;
+
+            this.triggerShake(10);
+            this.triggerFlash('purple', 0.3);
+            this.spawnExplosion(beacon.x, beacon.y, 'purple', 20);
+            this.spawnDamageText(this.player.x, this.player.y - 60, "SINGULARITY ABSORBED");
+            this.spawnDamageText(this.player.x, this.player.y - 30, `-${cost} INTEGRITY`);
+            this.spawnDamageText(this.player.x, this.player.y, "VOID MASS +1");
+
+            this.beacons = this.beacons.filter(activeBeacon => activeBeacon !== beacon);
         });
     }
 
@@ -1307,7 +1166,7 @@ export class GameEngine {
         }));
 
         this.enemies.forEach(e => {
-            const size = this.getEnemyRenderSize(e);
+            const size = getEnemyRenderSize(e);
             this.drawEntity(e.x, e.y, () => {
 
                 // --- TELEGRAPHING: PRE-DRAW ---
@@ -1798,27 +1657,6 @@ export class GameEngine {
 
         return screenX >= -100 && screenX <= visibleW + 100 &&
             screenY >= -100 && screenY <= visibleH + 100;
-    }
-
-    private isWorldPointNearCamera(x: number, y: number, padding: number): boolean {
-        const visibleW = this.width / this.CAMERA_ZOOM;
-        const visibleH = this.height / this.CAMERA_ZOOM;
-        const centerX = visibleW / 2;
-        const centerY = visibleH / 2;
-
-        const screenX = x - this.player.x + centerX;
-        const screenY = y - this.player.y + centerY;
-
-        return screenX >= -padding && screenX <= visibleW + padding &&
-            screenY >= -padding && screenY <= visibleH + padding;
-    }
-
-    private getEnemyRenderSize(enemy: Enemy): number {
-        return enemy.customSize ?? SETTINGS.ENEMY.SIZE;
-    }
-
-    private getEnemyCollisionRadius(enemy: Enemy): number {
-        return this.getEnemyRenderSize(enemy);
     }
 
     private drawEntity(worldX: number, worldY: number, drawFn: () => void) {

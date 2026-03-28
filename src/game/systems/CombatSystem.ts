@@ -135,6 +135,7 @@ export class CombatSystem {
             if (enemy.markedForDeletion) return;
             if (enemy.isBoss) return;
             if (enemy.customSize && enemy.customSize <= 25) return;
+            if (enemy.spriteType === 2) return; // Turret archetype already has its own firing pattern.
 
             if (enemy.shootCooldown === undefined) return;
 
@@ -155,7 +156,8 @@ export class CombatSystem {
                 color: enemy.bossColor && (enemy.bossColor === '#800080' || enemy.bossColor === '#006400') ? 'orange' : 'red'
             });
 
-            enemy.shootCooldown = 3 + Math.random() * 2;
+            enemy.shootCooldown = SETTINGS.ENEMY.SHOOT_COOLDOWN_REPEAT_MIN +
+                Math.random() * (SETTINGS.ENEMY.SHOOT_COOLDOWN_REPEAT_MAX - SETTINGS.ENEMY.SHOOT_COOLDOWN_REPEAT_MIN);
         });
     }
 
