@@ -8,6 +8,8 @@ import { CollisionSystem, CollisionSystemContext, getEnemyRenderSize } from './s
 import { ProjectileSystem, ProjectileSystemContext } from './systems/ProjectileSystem';
 import { SpawnSystem, SpawnSystemContext } from './systems/SpawnSystem';
 import { EnvironmentSystem, EnvironmentSystemContext } from './systems/EnvironmentSystem';
+import { WorldRenderer, WorldRendererContext } from './render/WorldRenderer';
+import { HudRenderer, HudRendererContext } from './render/HudRenderer';
 
 
 
@@ -59,12 +61,13 @@ export class GameEngine {
     private readonly projectileSystem: ProjectileSystem = new ProjectileSystem();
     private readonly spawnSystem: SpawnSystem = new SpawnSystem();
     private readonly environmentSystem: EnvironmentSystem = new EnvironmentSystem();
+    private readonly worldRenderer: WorldRenderer = new WorldRenderer();
+    private readonly hudRenderer: HudRenderer = new HudRenderer();
 
     // Buff Timers
     private rapidFireTimer: number = 0;
     private spreadShotTimer: number = 0;
 
-    // private bgStars: { x: number, y: number, z: number }[] = []; REMOVED for Procedural Parallax
     private spriteCache: Map<string, HTMLCanvasElement> = new Map();
     private onUIUpdate: (state: GameState) => void;
     private onLevelUp: () => void;
@@ -229,7 +232,7 @@ export class GameEngine {
         this.state.currentSector++;
         this.state.bossActive = false;
         this.state.sectorTimer = 0;
-        this.spriteCache.clear();
+        this.worldRenderer.clearSpriteCache();
 
         // Reward
         const darkMatter = Math.floor(100 * Math.pow(1.5, this.state.currentSector - 1));
@@ -338,6 +341,46 @@ export class GameEngine {
             spawnDamageText: (x, y, damage) => this.spawnDamageText(x, y, damage),
             triggerFlash: (color, intensity) => this.triggerFlash(color, intensity),
             applyDirectDamageToEnemy: (enemy, damage, options) => this.applyDirectDamageToEnemy(enemy, damage, options)
+        };
+    }
+
+    private getWorldRenderContext(): WorldRendererContext {
+        return {
+            ctx: this.ctx,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM,
+            state: this.state,
+            player: this.player,
+            inputActive: this.input.active,
+            shipTilt: this.shipTilt,
+            rapidFireTimer: this.rapidFireTimer,
+            spreadShotTimer: this.spreadShotTimer,
+            shakeIntensity: this.shakeIntensity,
+            backgroundStars: this.backgroundStars,
+            obstacles: this.obstacles,
+            beacons: this.beacons,
+            gems: this.gems,
+            powerUps: this.powerUps,
+            particles: this.particles,
+            enemies: this.enemies,
+            projectiles: this.projectiles,
+            enemyProjectiles: this.enemyProjectiles,
+            damageTexts: this.damageTexts
+        };
+    }
+
+    private getHudRenderContext(): HudRendererContext {
+        return {
+            ctx: this.ctx,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM,
+            state: this.state,
+            player: this.player,
+            boss: this.enemies.find(enemy => enemy.isBoss),
+            flashAlpha: this.flashAlpha,
+            flashColor: this.flashColor
         };
     }
 
@@ -810,7 +853,7 @@ export class GameEngine {
         return canvas;
     }
 
-    public render() {
+    private renderLegacy() {
         const { ctx, width, height } = this;
 
         // --- 1. PARALLAX BACKGROUND ---
@@ -1497,6 +1540,13 @@ export class GameEngine {
         this.ctx.restore();
     }
 
+    public render() {
+        if (false) {
+            this.renderLegacy();
+        }
+        this.worldRenderer.render(this.getWorldRenderContext());
+        this.hudRenderer.render(this.getHudRenderContext());
+    }
 
 
     public applyUpgrade(_startStats: GameStats, upgrade: Upgrade) {

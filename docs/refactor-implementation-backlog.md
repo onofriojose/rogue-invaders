@@ -62,6 +62,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 - 2026-03-28 Batch 3 complete: extracted `src/game/systems/CombatSystem.ts` and `src/game/systems/BossSystem.ts`; `GameEngine.ts` now delegates combat and boss responsibilities through typed context wrappers
 - 2026-03-28 Batch 4 complete: extracted `src/game/systems/CollisionSystem.ts` and `src/game/systems/ProjectileSystem.ts`; tuned early-game spawn pacing and enemy firing cadence after manual playtest feedback
 - 2026-03-28 Batch 5 complete: extracted `src/game/systems/SpawnSystem.ts` and `src/game/systems/EnvironmentSystem.ts`; `GameEngine.ts` now delegates sector timing, spawn rules, wind, obstacles, and beacon spawning through typed wrappers
+- 2026-03-28 Batch 6 complete: extracted `src/game/render/WorldRenderer.ts` and `src/game/render/HudRenderer.ts`; nerfed the boss encounter pacing with fewer early guards, slower reinforcements, and softer HP scaling
 
 ## Phase 0: Baseline and Guardrails
 
@@ -270,6 +271,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: L
+- Status: done
 - Depends on: ENG-201
 - Files:
   - `src/game/render/WorldRenderer.ts`

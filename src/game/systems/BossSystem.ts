@@ -31,7 +31,7 @@ export class BossSystem {
 
         const maxBossSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.8;
         const speed = Math.min(maxBossSpeed, SETTINGS.ENEMY.BASE_SPEED + Math.random() * (sector * 2) + (sector * 2));
-        const hpMultiplier = Math.random() * 5 + 30;
+        const hpMultiplier = this.getBossHpMultiplier(sector);
         const hp = SETTINGS.ENEMY.BASE_HP * hpMultiplier * sector;
         const distance = (Math.max(ctx.width, ctx.height) / ctx.cameraZoom) / 2 + 200;
         const angle = Math.random() * Math.PI * 2;
@@ -58,7 +58,7 @@ export class BossSystem {
             attackState: 0
         });
 
-        const eliteCount = 2 + sector;
+        const eliteCount = this.getInitialEliteGuardCount(sector);
         const guardRadius = 150;
 
         for (let i = 0; i < eliteCount; i++) {
@@ -80,7 +80,7 @@ export class BossSystem {
                 customSize: 45,
                 bossColor: '#FF4500',
                 isBoss: false,
-                shootCooldown: Math.random() * 2,
+                shootCooldown: this.getInitialEliteShootCooldown(),
                 aiState: AIState.CHASING
             });
         }
@@ -248,11 +248,12 @@ export class BossSystem {
         if (!boss.reinforceTimer) boss.reinforceTimer = 0;
         boss.reinforceTimer += dt;
 
-        if (boss.reinforceTimer > 4.0) {
+        const reinforceInterval = this.getBossReinforceInterval(ctx.state.currentSector);
+        if (boss.reinforceTimer > reinforceInterval) {
             boss.reinforceTimer = 0;
 
             const activeElites = ctx.enemies.filter(e => !e.isBoss && e.customSize && e.customSize >= 40).length;
-            const maxElites = 2 + ctx.state.currentSector;
+            const maxElites = this.getBossMaxEliteReinforcements(ctx.state.currentSector);
 
             if (activeElites < maxElites) {
                 const angle = Math.random() * Math.PI * 2;
@@ -271,11 +272,41 @@ export class BossSystem {
                     bossColor: '#FF4500',
                     customSize: 45,
                     markedForDeletion: false,
-                    aiState: AIState.CHASING
+                    aiState: AIState.CHASING,
+                    shootCooldown: this.getInitialEliteShootCooldown()
                 });
 
                 ctx.spawnExplosion(boss.x, boss.y, '#FF4500', 5);
             }
         }
+    }
+
+    private getBossHpMultiplier(sector: number): number {
+        if (sector === 1) return 16 + Math.random() * 4;
+        if (sector === 2) return 18 + Math.random() * 5;
+        if (sector === 3) return 22 + Math.random() * 6;
+
+        return 26 + Math.random() * 6 + Math.max(0, sector - 4) * 2;
+    }
+
+    private getInitialEliteGuardCount(sector: number): number {
+        if (sector === 1) return 0;
+        if (sector === 2) return 1;
+        return Math.min(2, sector - 1);
+    }
+
+    private getBossReinforceInterval(sector: number): number {
+        return sector <= 2 ? 12 : 10;
+    }
+
+    private getBossMaxEliteReinforcements(sector: number): number {
+        if (sector === 1) return 1;
+        if (sector === 2) return 2;
+        return Math.min(4, 1 + Math.floor(sector / 2));
+    }
+
+    private getInitialEliteShootCooldown(): number {
+        return SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN +
+            Math.random() * (SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MAX - SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN);
     }
 }
