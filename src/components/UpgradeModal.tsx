@@ -9,132 +9,143 @@ interface UpgradeModalProps {
 export const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrades, onSelect }) => {
     return (
         <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            background: 'rgba(0, 0, 0, 0.85)',
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.88)',
             display: 'flex',
             flexDirection: 'column',
-            justifyContent: 'center',
+            justifyContent: 'flex-start',
             alignItems: 'center',
             pointerEvents: 'auto',
-            backdropFilter: 'blur(5px)',
-            zIndex: 100
+            zIndex: 100,
+            padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
+            boxSizing: 'border-box',
+            overflowY: 'auto',
+            WebkitOverflowScrolling: 'touch'
         }}>
             <div style={{
-                fontSize: '32px',
+                fontSize: 'clamp(22px, 5vw, 32px)',
                 color: '#ffff00',
-                marginBottom: '30px',
-                textShadow: '0 0 15px #ffff00',
+                marginTop: '8px',
+                marginBottom: '18px',
                 textTransform: 'uppercase',
-                letterSpacing: '4px',
+                letterSpacing: '0.18em',
                 textAlign: 'center',
-                fontFamily: "'Courier New', Courier, monospace"
+                fontFamily: "'Courier New', Courier, monospace",
+                lineHeight: 1.2
             }}>
                 SYSTEM UPGRADE
             </div>
 
             <div style={{
-                display: 'flex',
-                gap: '20px',
-                flexWrap: 'wrap',
-                justifyContent: 'center',
-                width: '100%',
-                padding: '20px'
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+                gap: '16px',
+                width: 'min(100%, 960px)',
+                alignItems: 'start',
+                paddingBottom: '12px'
             }}>
-                {upgrades.map((u, i) => {
+                {upgrades.map((upgrade, index) => {
                     let borderColor = '#ffffff';
-                    let shadowColor = '#ffffff';
+                    let accentColor = '#aaaaaa';
 
-                    if (u.rarity === 'common') { borderColor = '#ffffff'; shadowColor = '#aaaaaa'; } // Default/White
-                    if (u.rarity === 'rare') { borderColor = '#00ffff'; shadowColor = '#00ffff'; }
-                    if (u.rarity === 'epic') { borderColor = '#ff00ff'; shadowColor = '#ff00ff'; }
-                    if (u.rarity === 'legendary') { borderColor = '#ffff00'; shadowColor = '#ffff00'; }
+                    if (upgrade.rarity === 'rare') {
+                        borderColor = '#00ffff';
+                        accentColor = '#00ffff';
+                    } else if (upgrade.rarity === 'epic') {
+                        borderColor = '#ff00ff';
+                        accentColor = '#ff00ff';
+                    } else if (upgrade.rarity === 'legendary') {
+                        borderColor = '#ffff00';
+                        accentColor = '#ffff00';
+                    }
 
                     return (
                         <div
-                            key={i}
-                            onClick={() => onSelect(u)}
+                            key={index}
+                            onClick={() => onSelect(upgrade)}
                             className="upgrade-card"
                             style={{
                                 background: 'linear-gradient(180deg, rgba(20, 20, 40, 0.95) 0%, rgba(10, 10, 20, 1) 100%)',
                                 border: `2px solid ${borderColor}`,
                                 borderRadius: '16px',
-                                width: '220px',
-                                height: '320px',
-                                padding: '24px',
+                                width: '100%',
+                                minHeight: '240px',
+                                padding: '20px',
+                                boxSizing: 'border-box',
                                 color: 'white',
                                 cursor: 'pointer',
-                                transition: 'transform 0.2s, box-shadow 0.2s',
+                                transition: 'box-shadow 0.2s, border-color 0.2s',
                                 display: 'flex',
                                 flexDirection: 'column',
-                                alignItems: 'center',
-                                textAlign: 'center',
-                                boxShadow: `0 0 15px ${shadowColor}40`, // Low opacity base glow
+                                alignItems: 'stretch',
+                                textAlign: 'left',
+                                boxShadow: `0 0 12px ${accentColor}22`,
                                 fontFamily: "'Courier New', Courier, monospace",
                                 position: 'relative',
-                                overflow: 'hidden'
+                                overflow: 'hidden',
+                                alignSelf: 'start'
                             }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.transform = 'translateY(-8px)';
-                                e.currentTarget.style.boxShadow = `0 0 25px ${shadowColor}`;
+                            onMouseEnter={(event) => {
+                                event.currentTarget.style.boxShadow = `0 0 18px ${accentColor}55`;
                             }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.transform = 'translateY(0)';
-                                e.currentTarget.style.boxShadow = `0 0 15px ${shadowColor}40`;
+                            onMouseLeave={(event) => {
+                                event.currentTarget.style.boxShadow = `0 0 12px ${accentColor}22`;
                             }}
                         >
-                            {/* Icon Container */}
                             <div style={{
-                                fontSize: '64px',
-                                marginBottom: '20px',
-                                filter: `drop-shadow(0 0 10px ${shadowColor})`,
-                                lineHeight: '1'
+                                fontSize: 'clamp(28px, 6vw, 42px)',
+                                marginBottom: '14px',
+                                lineHeight: '1',
+                                color: accentColor,
+                                textAlign: 'center'
                             }}>
-                                {u.icon || '📦'}
+                                {upgrade.icon || '[UPG]'}
                             </div>
 
                             <h3 style={{
-                                margin: '0 0 15px 0',
+                                margin: '0 0 12px 0',
                                 color: borderColor,
-                                fontSize: '18px',
+                                fontSize: 'clamp(16px, 4vw, 18px)',
                                 textTransform: 'uppercase',
-                                letterSpacing: '1px',
-                                minHeight: '44px', // Fixed height for 2 lines title
+                                letterSpacing: '0.08em',
+                                minHeight: '40px',
                                 display: 'flex',
                                 alignItems: 'center',
-                                justifyContent: 'center'
+                                justifyContent: 'center',
+                                textAlign: 'center',
+                                lineHeight: 1.25
                             }}>
-                                {u.title}
+                                {upgrade.title}
                             </h3>
 
                             <div style={{
                                 width: '100%',
                                 height: '1px',
                                 background: `linear-gradient(90deg, transparent, ${borderColor}, transparent)`,
-                                marginBottom: '15px'
+                                marginBottom: '12px'
                             }} />
 
                             <p style={{
-                                fontSize: '14px',
+                                fontSize: 'clamp(13px, 3.6vw, 14px)',
                                 color: '#e0e0e0',
-                                lineHeight: '1.5',
-                                flex: 1 // Fill remaining space
+                                lineHeight: '1.45',
+                                flex: 1,
+                                margin: 0
                             }}>
-                                {u.desc}
+                                {upgrade.desc}
                             </p>
 
                             <div style={{
                                 fontSize: '12px',
-                                color: shadowColor,
-                                marginTop: 'auto',
+                                color: accentColor,
+                                marginTop: '16px',
                                 textTransform: 'uppercase',
-                                letterSpacing: '2px',
-                                opacity: 0.8
+                                letterSpacing: '0.16em',
+                                opacity: 0.8,
+                                textAlign: 'center'
                             }}>
-                                {u.rarity}
+                                {upgrade.rarity}
                             </div>
                         </div>
                     );

@@ -14,11 +14,8 @@ interface RunSummaryOverlayProps {
 export const RunSummaryOverlay: React.FC<RunSummaryOverlayProps> = ({ summary, onReturnToBase }) => {
     return (
         <div style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
+            position: 'fixed',
+            inset: 0,
             background: 'rgba(0, 0, 0, 0.9)',
             display: 'flex',
             flexDirection: 'column',
@@ -27,10 +24,15 @@ export const RunSummaryOverlay: React.FC<RunSummaryOverlayProps> = ({ summary, o
             pointerEvents: 'auto',
             zIndex: 200,
             color: 'white',
-            fontFamily: screenFontFamily
+            fontFamily: screenFontFamily,
+            padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
+            boxSizing: 'border-box',
+            textAlign: 'center'
         }}>
-            <h1 style={{ color: '#ff0055', fontSize: '50px', textShadow: '0 0 20px red' }}>MISSION FAILED</h1>
-            <div style={{ fontSize: '24px', margin: '20px 0', textAlign: 'center' }}>
+            <h1 style={{ color: '#ff0055', fontSize: 'clamp(32px, 8vw, 50px)', textShadow: '0 0 20px red', margin: 0 }}>
+                MISSION FAILED
+            </h1>
+            <div style={{ fontSize: 'clamp(18px, 4.6vw, 24px)', margin: '20px 0', textAlign: 'center' }}>
                 <p>TIME SURVIVED: <span style={{ color: '#00ffff' }}>{Math.floor(summary.survived)}s</span></p>
                 <p>DARK MATTER COLLECTED: <span style={{ color: '#ffff00' }}>{summary.gold}</span></p>
             </div>
