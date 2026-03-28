@@ -2,6 +2,8 @@ import { SETTINGS } from '../constants';
 import { GameState, Player, Enemy, Projectile, Gem, Particle, GameStats, Upgrade, DamageText, EnemyProjectile, AIState, Beacon } from '../types';
 import { InputManager } from './InputManager';
 import { SPRITES } from './EnemySprites';
+import { BossSystem, BossSystemContext } from './systems/BossSystem';
+import { CombatSystem, CombatSystemContext, EnemyDamageOptions, EnemyDefeatOptions } from './systems/CombatSystem';
 
 import { Obstacle } from '../types';
 
@@ -49,10 +51,11 @@ export class GameEngine {
 
     // Config
     private readonly CAMERA_ZOOM: number = 0.6;
+    private readonly combatSystem: CombatSystem = new CombatSystem();
+    private readonly bossSystem: BossSystem = new BossSystem();
 
     // Internals
     private spawnTimer: number = 0;
-    private shieldTickTimer: number = 0;
     // Buff Timers
     private rapidFireTimer: number = 0;
     private spreadShotTimer: number = 0;
@@ -204,93 +207,7 @@ export class GameEngine {
     }
 
     private spawnBoss() {
-        this.state.bossActive = true;
-        const sector = this.state.currentSector;
-
-        // --- 1. DETERMINISTIC BOSS ROTATION (Custom Order) ---
-        // Order: Mothership (11) -> Interceptor (12) -> Dreadnought (10)
-        const bossOrder = [11, 12, 10];
-
-        // Calculate index: (Sector 1 -> Index 0, Sector 2 -> Index 1, etc.)
-        const typeIndex = (this.state.currentSector - 1) % bossOrder.length;
-        const bossType = bossOrder[typeIndex];
-
-        // 3. Boss Size Buffs
-        let bossSize = 40;
-        if (bossType === 10) { // Dreadnought
-            bossSize = 120 + (sector * 5);
-        } else if (bossType === 11) { // Mothership
-            bossSize = 100 + (sector * 3);
-        } else { // Interceptor (12)
-            bossSize = 80 + (sector * 2);
-        }
-
-        // Cap speed
-        const maxBossSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.8;
-        const speed = Math.min(maxBossSpeed, SETTINGS.ENEMY.BASE_SPEED + Math.random() * (sector * 2) + (sector * 2));
-
-        const hpMultiplier = Math.random() * 5 + 30; // 30x to 35x
-        const hp = SETTINGS.ENEMY.BASE_HP * hpMultiplier * sector;
-
-        const distance = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + 200;
-        const angle = Math.random() * Math.PI * 2;
-
-        const bossX = this.player.x + Math.cos(angle) * distance;
-        const bossY = this.player.y + Math.sin(angle) * distance;
-
-        this.enemies.push({
-            x: bossX,
-            y: bossY,
-            hp: hp,
-            maxHp: hp,
-            shield: hp * 0.5, // 50% Shield
-            maxShield: hp * 0.5,
-            speed: speed,
-            markedForDeletion: false,
-            spriteType: bossType,
-            frameCount: 0,
-            isBoss: true,
-            bossColor: `hsl(${Math.random() * 360}, 100%, 50%)`,
-            customSize: bossSize,
-            // --- FIX: EXPLICIT AI INITIALIZATION ---
-            angleOffset: 0,   // Start angle at 0
-            attackTimer: 0,   // Ready to count
-            attackState: 0    // Default state
-        });
-
-        // --- SPAWN ELITE GUARDS (THE MEGABONK) ---
-        const eliteCount = 2 + sector; // Difficulty scaling
-        const guardRadius = 150;
-
-        for (let i = 0; i < eliteCount; i++) {
-            const guardAngle = (i / eliteCount) * Math.PI * 2;
-            const gx = bossX + Math.cos(guardAngle) * guardRadius;
-            const gy = bossY + Math.sin(guardAngle) * guardRadius;
-
-            // Elite Stats
-            // ARCHETYPE: INTERCEPTOR (ID 12) or SQUID (ID 0) for Speed
-            const eliteSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.9; // Fast!
-            const spriteType = Math.random() > 0.5 ? 0 : 12; // Fast types
-
-            this.enemies.push({
-                x: gx,
-                y: gy,
-                hp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 5, // 5x HP
-                maxHp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 5,
-                speed: eliteSpeed,
-                markedForDeletion: false,
-                spriteType: spriteType,
-                frameCount: 0,
-                customSize: 45, // Big
-                bossColor: '#FF4500', // Orange Red Glow
-                isBoss: false, // They are minions
-                shootCooldown: Math.random() * 2,
-                aiState: AIState.CHASING
-            });
-        }
-
-        this.state.bossMaxHp = hp;
-        this.state.bossCurrentHp = hp;
+        this.bossSystem.spawnBoss(this.getBossContext());
     }
 
     public spawnPowerUp(x: number, y: number, force: boolean = false) {
@@ -342,111 +259,45 @@ export class GameEngine {
         this.spawnDamageText(this.player.x, this.player.y - 100, darkMatter); // Show reward text
     }
 
-    private addGemDrop(x: number, y: number, value: number = 10) {
-        this.gems.push({
-            x,
-            y,
-            value,
-            markedForDeletion: false,
-            magnetized: false
-        });
+    private getCombatContext(): CombatSystemContext {
+        return {
+            state: this.state,
+            player: this.player,
+            enemies: this.enemies,
+            projectiles: this.projectiles,
+            enemyProjectiles: this.enemyProjectiles,
+            gems: this.gems,
+            beacons: this.beacons,
+            rapidFireTimer: this.rapidFireTimer,
+            spreadShotTimer: this.spreadShotTimer,
+            spawnExplosion: (x, y, color, count) => this.spawnExplosion(x, y, color, count),
+            spawnDamageText: (x, y, damage) => this.spawnDamageText(x, y, damage),
+            spawnPowerUp: (x, y, force) => this.spawnPowerUp(x, y, force),
+            triggerShake: (amount) => this.triggerShake(amount),
+            triggerFlash: (color, intensity) => this.triggerFlash(color, intensity),
+            nextSector: () => this.nextSector()
+        };
     }
 
-    private addBossBeacon(x: number, y: number) {
-        this.beacons.push({
-            x,
-            y,
-            radius: 30,
-            active: true
-        });
+    private getBossContext(): BossSystemContext {
+        return {
+            state: this.state,
+            player: this.player,
+            enemies: this.enemies,
+            enemyProjectiles: this.enemyProjectiles,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM,
+            spawnExplosion: (x, y, color, count) => this.spawnExplosion(x, y, color, count)
+        };
     }
 
-    private syncBossState(enemy: Enemy) {
-        if (enemy.isBoss) {
-            this.state.bossCurrentHp = Math.max(0, enemy.hp);
-        }
+    private defeatEnemy(enemy: Enemy, options: EnemyDefeatOptions = {}) {
+        this.combatSystem.defeatEnemy(this.getCombatContext(), enemy, options);
     }
 
-    private getEnemyDeathColor(enemy: Enemy): string {
-        return enemy.isBoss ? (enemy.bossColor || SETTINGS.COLORS.ENEMY) : this.state.sectorColors.enemyOutline;
-    }
-
-    private defeatEnemy(
-        enemy: Enemy,
-        options: {
-            spawnPowerUp?: boolean;
-            addGem?: boolean;
-            addKill?: boolean;
-            explosionColor?: string;
-            explosionCount?: number;
-        } = {}
-    ) {
-        if (enemy.markedForDeletion) return;
-
-        enemy.markedForDeletion = true;
-        this.syncBossState(enemy);
-
-        this.spawnExplosion(
-            enemy.x,
-            enemy.y,
-            options.explosionColor || this.getEnemyDeathColor(enemy),
-            options.explosionCount ?? (enemy.isBoss ? 50 : 15)
-        );
-
-        if (options.spawnPowerUp) {
-            this.spawnPowerUp(enemy.x, enemy.y, enemy.isBoss);
-        }
-
-        if (enemy.isBoss) {
-            this.addBossBeacon(enemy.x, enemy.y);
-            this.triggerShake(15);
-            this.triggerFlash('white', 0.7);
-            this.nextSector();
-            return;
-        }
-
-        if (options.addGem) {
-            this.addGemDrop(enemy.x, enemy.y);
-        }
-
-        if (options.addKill) {
-            this.state.kills++;
-        }
-    }
-
-    private applyDirectDamageToEnemy(
-        enemy: Enemy,
-        damage: number,
-        options: {
-            damageText?: number | string | false;
-            hitExplosionColor?: string;
-            hitExplosionCount?: number;
-            spawnPowerUpOnKill?: boolean;
-            addGemOnKill?: boolean;
-            addKillOnKill?: boolean;
-        } = {}
-    ) {
-        if (enemy.markedForDeletion) return;
-
-        enemy.hp -= damage;
-
-        if (options.hitExplosionColor) {
-            this.spawnExplosion(enemy.x, enemy.y, options.hitExplosionColor, options.hitExplosionCount ?? 3);
-        }
-
-        if (options.damageText !== false) {
-            this.spawnDamageText(enemy.x, enemy.y, options.damageText ?? damage);
-        }
-
-        this.syncBossState(enemy);
-
-        if (enemy.hp <= 0) {
-            this.defeatEnemy(enemy, {
-                spawnPowerUp: options.spawnPowerUpOnKill,
-                addGem: options.addGemOnKill,
-                addKill: options.addKillOnKill
-            });
-        }
+    private applyDirectDamageToEnemy(enemy: Enemy, damage: number, options: EnemyDamageOptions = {}) {
+        this.combatSystem.applyDirectDamageToEnemy(this.getCombatContext(), enemy, damage, options);
     }
 
     private updatePlayer(dt: number) {
@@ -607,96 +458,11 @@ export class GameEngine {
     }
 
     private handleCombat(time: number) {
-        let fireRate = this.state.stats.fireRate;
-        if (this.rapidFireTimer > 0) fireRate /= 2;
-
-        if (time - this.player.lastShotTime < fireRate) return;
-
-        let nearest = null;
-        let minDist = Infinity;
-
-        this.enemies.forEach(e => {
-            const dx = e.x - this.player.x;
-            const dy = e.y - this.player.y;
-            const dist = dx * dx + dy * dy;
-            if (dist < minDist) {
-                minDist = dist;
-                nearest = e;
-            }
-        });
-
-        if (!nearest) return;
-
-        this.player.lastShotTime = time;
-        const target = nearest as Enemy;
-        const dx = target.x - this.player.x;
-        const dy = target.y - this.player.y;
-        const angle = Math.atan2(dy, dx);
-
-        const count = this.state.stats.projectileCount;
-        const startAngle = angle - (SETTINGS.WEAPON.FAN_ANGLE * (count - 1)) / 2;
-
-        for (let i = 0; i < count; i++) {
-            const finalAngle = startAngle + i * SETTINGS.WEAPON.FAN_ANGLE;
-            this.projectiles.push({
-                x: this.player.x,
-                y: this.player.y,
-                vx: Math.cos(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
-                vy: Math.sin(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
-                size: 10,
-                life: 1.5,
-                markedForDeletion: false
-            });
-        }
-
-        // SPREAD SHOT BUFF
-        if (this.spreadShotTimer > 0) {
-            [-0.26, 0.26].forEach(offset => { // +/- ~15 degrees
-                const finalAngle = angle + offset;
-                this.projectiles.push({
-                    x: this.player.x,
-                    y: this.player.y,
-                    vx: Math.cos(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
-                    vy: Math.sin(finalAngle) * SETTINGS.WEAPON.PROJECTILE_SPEED,
-                    size: 10,
-                    life: 1.5,
-                    markedForDeletion: false
-                });
-            });
-        }
+        this.combatSystem.handleCombat(this.getCombatContext(), time);
     }
 
     private handleShieldCombat(dt: number) {
-        if (this.state.stats.shieldRadius <= 0) return;
-
-        this.shieldTickTimer += dt;
-        if (this.shieldTickTimer >= 0.1) {
-            // Apply damage every 0.1s
-            const dmgPerTick = this.state.stats.shieldDamage * 0.1;
-
-            this.enemies.forEach(e => {
-                if (e.markedForDeletion) return;
-                const dx = e.x - this.player.x;
-                const dy = e.y - this.player.y;
-                const distSq = dx * dx + dy * dy;
-                const radiusSq = this.state.stats.shieldRadius * this.state.stats.shieldRadius;
-
-                if (distSq < radiusSq) {
-                    this.applyDirectDamageToEnemy(e, dmgPerTick, {
-                        damageText: false,
-                        addGemOnKill: true,
-                        addKillOnKill: true
-                    });
-
-                    // Visual feedback
-                    if (Math.random() > 0.7) {
-                        this.spawnExplosion(e.x, e.y, SETTINGS.COLORS.PLAYER, 2);
-                    }
-                }
-            });
-
-            this.shieldTickTimer = 0;
-        }
+        this.combatSystem.handleShieldCombat(this.getCombatContext(), dt);
     }
 
     private updateEntities(dt: number) {
@@ -794,237 +560,7 @@ export class GameEngine {
 
 
     private updateBossAI(boss: Enemy, dt: number) {
-        if (!boss.isBoss) return;
-
-        // FIX: Only initialize if properties are strictly undefined (preserve 0 values)
-        if (boss.attackTimer === undefined) boss.attackTimer = 0;
-        if (boss.angleOffset === undefined) boss.angleOffset = 0;
-        if (boss.attackState === undefined) boss.attackState = 0;
-
-        const dist = Math.sqrt(Math.pow(this.player.x - boss.x, 2) + Math.pow(this.player.y - boss.y, 2));
-        const angleToPlayer = Math.atan2(this.player.y - boss.y, this.player.x - boss.x);
-
-        // --- TYPE A: THE DREADNOUGHT (ID 10) ---
-        // "Bullet Hell": Slow, relentless, spiral shots
-        if (boss.spriteType === 10) {
-            // 1. Movement: Very slow tracking
-            boss.x += Math.cos(angleToPlayer) * boss.speed * 0.5 * dt;
-            boss.y += Math.sin(angleToPlayer) * boss.speed * 0.5 * dt;
-
-            // 2. Attack: Constant Spiral Fire
-            boss.attackTimer += dt;
-            const fireRate = boss.hp < boss.maxHp! * 0.5 ? 0.04 : 0.08; // Enrage: Faster fire (0.04s vs 0.08s)
-
-            if (boss.attackTimer > fireRate) {
-                boss.attackTimer = 0;
-                boss.angleOffset += 15 * (Math.PI / 180); // Rotate 15 degrees
-
-                // Fire Bullet
-                this.enemyProjectiles.push({
-                    x: boss.x,
-                    y: boss.y,
-                    vx: Math.cos(boss.angleOffset) * 200,
-                    vy: Math.sin(boss.angleOffset) * 200,
-                    size: 10,
-                    color: 'red',
-                    damage: 25
-                });
-
-                // Enrage: Dual Spiral
-                if (boss.hp < boss.maxHp! * 0.5) {
-                    this.enemyProjectiles.push({
-                        x: boss.x,
-                        y: boss.y,
-                        vx: Math.cos(boss.angleOffset + Math.PI) * 200,
-                        vy: Math.sin(boss.angleOffset + Math.PI) * 200,
-                        size: 10,
-                        color: 'orange',
-                        damage: 25
-                    });
-                }
-            }
-        }
-
-        // --- TYPE B: THE MOTHERSHIP (ID 11) ---
-        // "The Summoner": Kites player, spawns minions
-        else if (boss.spriteType === 11) {
-            // 1. Movement: Kiting (Maintain ~400px distance)
-            const kiteDist = 400;
-            if (dist < kiteDist) {
-                // Too close: Move AWAY
-                boss.x -= Math.cos(angleToPlayer) * boss.speed * dt;
-                boss.y -= Math.sin(angleToPlayer) * boss.speed * dt;
-            } else if (dist > kiteDist + 100) {
-                // Too far: Move CLOSER
-                boss.x += Math.cos(angleToPlayer) * boss.speed * dt;
-                boss.y += Math.sin(angleToPlayer) * boss.speed * dt;
-            }
-            // Else: Strafe/Hover (implied by doing nothing or adding sway later)
-
-            // 2. Attack: Spawn Swarmers
-            boss.attackTimer += dt;
-            if (boss.attackTimer > 3.0) {
-                boss.attackTimer = 0;
-
-                // Cap minions
-                if (this.enemies.length < 30) {
-                    for (let i = 0; i < 2; i++) {
-                        const spawnAngle = Math.random() * Math.PI * 2;
-                        this.enemies.push({
-                            x: boss.x + Math.cos(spawnAngle) * 50,
-                            y: boss.y + Math.sin(spawnAngle) * 50,
-                            hp: 10 + (this.state.level * 2), // Weak minions
-                            speed: 100,
-                            spriteType: 0, // Swarmer ID
-                            frameCount: 0,
-                            markedForDeletion: false,
-                            customSize: 20
-                        });
-                        this.spawnExplosion(boss.x, boss.y, 'purple', 5); // Spawn effect
-                    }
-                }
-            }
-
-            // 3. Defensive Shooting (Ring of 8)
-            if (boss.shootCooldown === undefined) boss.shootCooldown = 0;
-            boss.shootCooldown -= dt;
-            if (boss.shootCooldown <= 0) {
-                boss.shootCooldown = 1.5; // Every 1.5s
-                for (let i = 0; i < 8; i++) {
-                    const angle = (i / 8) * Math.PI * 2;
-                    this.enemyProjectiles.push({
-                        x: boss.x,
-                        y: boss.y,
-                        vx: Math.cos(angle) * 200,
-                        vy: Math.sin(angle) * 200,
-                        size: 10,
-                        color: 'purple',
-                        damage: 25 // High Damage
-                    });
-                }
-            }
-        }
-
-        // --- TYPE C: THE INTERCEPTOR (ID 12) ---
-        // "The Duelist": Dash > Shoot > Dash
-        else if (boss.spriteType === 12) {
-            // State Machine
-            // 0: HOVER (Circling/Strafing) - 2s
-            // 1: TELEGRAPH (Charge Up) - 0.5s
-            // 2: DASH (Attack) - 0.3s
-            // 3: RECOVER (Shoot) - 0.5s
-
-            if (boss.attackState === 0) { // HOVER
-                // Strafe around player
-                const strafeAngle = angleToPlayer + Math.PI / 2;
-                boss.x += Math.cos(strafeAngle) * boss.speed * 1.5 * dt;
-                boss.y += Math.sin(strafeAngle) * boss.speed * 1.5 * dt;
-
-                // Pull closer if too far
-                if (dist > 300) {
-                    boss.x += Math.cos(angleToPlayer) * boss.speed * 0.5 * dt;
-                    boss.y += Math.sin(angleToPlayer) * boss.speed * 0.5 * dt;
-                }
-
-                boss.attackTimer += dt;
-                if (boss.attackTimer > 2.0) {
-                    boss.attackState = 1;
-                    boss.attackTimer = 0;
-                }
-
-            } else if (boss.attackState === 1) { // TELEGRAPH
-                // Stop and Flash
-                boss.bossColor = (Math.floor(Date.now() / 50) % 2 === 0) ? 'red' : 'white';
-
-                boss.attackTimer += dt;
-                if (boss.attackTimer > 0.5) {
-                    boss.attackState = 2;
-                    boss.attackTimer = 0;
-                    boss.bossColor = undefined; // Reset
-
-                    // Lock Dash Target
-                    const dashAngle = angleToPlayer; // Predict? Nah, clean dash is fair
-                    boss.vx = Math.cos(dashAngle) * 1000; // FAST (Increased from 800)
-                    boss.vy = Math.sin(dashAngle) * 1000;
-                }
-
-            } else if (boss.attackState === 2) { // DASH
-                boss.x += (boss.vx || 0) * dt;
-                boss.y += (boss.vy || 0) * dt;
-
-                // Trail
-                this.spawnExplosion(boss.x, boss.y, 'cyan', 2);
-
-                boss.attackTimer += dt;
-                if (boss.attackTimer > 0.3) {
-                    boss.attackState = 3;
-                    boss.attackTimer = 0;
-                    boss.vx = 0; boss.vy = 0; // Stop
-                }
-
-            } else if (boss.attackState === 3) { // RECOVER / SHOOT
-                if (boss.attackTimer === 0) {
-                    // Fire Spread on enter state
-                    [-0.3, 0, 0.3].forEach(offset => {
-                        this.enemyProjectiles.push({
-                            x: boss.x,
-                            y: boss.y,
-                            vx: Math.cos(angleToPlayer + offset) * 300,
-                            vy: Math.sin(angleToPlayer + offset) * 300,
-                            size: 12,
-                            color: 'cyan',
-                            damage: 25
-                        });
-                    });
-                }
-
-                boss.attackTimer += dt;
-                if (boss.attackTimer > 0.5) { // Rest for 0.5s (Reduced from 1.0s)
-                    boss.attackState = 0;
-                    boss.attackTimer = 0;
-                }
-            }
-        }
-
-        // --- BOSS REINFORCEMENTS (Infinite Elites) ---
-        if (!boss.reinforceTimer) boss.reinforceTimer = 0;
-        boss.reinforceTimer += dt;
-
-        if (boss.reinforceTimer > 4.0) { // Check every 4 seconds
-            boss.reinforceTimer = 0;
-
-            // Count active Elites (customSize > 40 signifies Elite)
-            const activeElites = this.enemies.filter(e => !e.isBoss && e.customSize && e.customSize >= 40).length;
-            const maxElites = 2 + this.state.currentSector; // Scaling cap
-
-            if (activeElites < maxElites) {
-                // Spawn Aggressive Elite
-                const angle = Math.random() * Math.PI * 2;
-                const spawnDist = 100;
-
-                // ARCHETYPE: INTERCEPTOR (ID 12) or SQUID (ID 0) for Speed
-                // We force them to be FASTER than the boss to avoid "clumping"
-                const eliteSpeed = SETTINGS.PLAYER.BASE_SPEED * 0.9; // Fast!
-
-                this.enemies.push({
-                    x: boss.x + Math.cos(angle) * spawnDist,
-                    y: boss.y + Math.sin(angle) * spawnDist,
-                    hp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 4, // Tanky
-                    maxHp: (SETTINGS.ENEMY.BASE_HP + (this.state.level * 5)) * 4,
-                    speed: eliteSpeed,
-                    spriteType: Math.random() > 0.5 ? 0 : 12, // Fast types
-                    frameCount: 0,
-                    isBoss: false,
-                    bossColor: '#FF4500', // Orange Red
-                    customSize: 45, // Big
-                    markedForDeletion: false,
-                    aiState: AIState.CHASING
-                });
-
-                // Visual feedback
-                this.spawnExplosion(boss.x, boss.y, '#FF4500', 5);
-            }
-        }
+        this.bossSystem.updateBossAI(this.getBossContext(), boss, dt);
     }
 
     private updateEnemyAI(e: Enemy, dt: number) {
@@ -1131,36 +667,7 @@ export class GameEngine {
     }
 
     private handleEnemyShooting(dt: number) {
-        this.enemies.forEach(e => {
-            if (e.markedForDeletion) return;
-            if (e.isBoss) return;
-
-            // CheckArchetype: Swarmers (size 20) don't shoot.
-            if (e.customSize && e.customSize <= 25) return;
-
-            if (e.shootCooldown !== undefined) {
-                e.shootCooldown -= dt;
-                if (e.shootCooldown <= 0) {
-                    // SHOOT
-                    const dx = this.player.x - e.x;
-                    const dy = this.player.y - e.y;
-                    const angle = Math.atan2(dy, dx);
-                    const speed = 250;
-
-                    this.enemyProjectiles.push({
-                        x: e.x,
-                        y: e.y,
-                        vx: Math.cos(angle) * speed,
-                        vy: Math.sin(angle) * speed,
-                        size: 8,
-                        color: e.bossColor && (e.bossColor === '#800080' || e.bossColor === '#006400') ? 'orange' : 'red'
-                    });
-
-                    // Reset Cooldown
-                    e.shootCooldown = 3 + Math.random() * 2;
-                }
-            }
-        });
+        this.combatSystem.handleEnemyShooting(this.getCombatContext(), dt);
     }
 
     private handleEnvironment(dt: number) {

@@ -55,6 +55,12 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 - PR 9: UI/mobile/PWA pass
 - PR 10: Tests, profiling, and release cleanup
 
+## Progress Log
+
+- 2026-03-28 Batch 1 complete: `REF-003`, `BUG-101`, `BUG-102`, `BUG-103`, `BUG-104`
+- 2026-03-28 Batch 2 complete: `BUG-105`
+- 2026-03-28 Batch 3 complete: extracted `src/game/systems/CombatSystem.ts` and `src/game/systems/BossSystem.ts`; `GameEngine.ts` now delegates combat and boss responsibilities through typed context wrappers
+
 ## Phase 0: Baseline and Guardrails
 
 ### REF-001: Create a manual regression checklist
@@ -89,6 +95,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: S
+- Status: done
 - Depends on: none
 - Files:
   - `README.md`
@@ -109,6 +116,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: S
+- Status: done
 - Depends on: REF-001
 - Files:
   - `src/game/InputManager.ts`
@@ -122,6 +130,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: S
+- Status: done
 - Depends on: REF-001
 - Files:
   - `src/game/GameEngine.ts`
@@ -135,6 +144,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: M
+- Status: done
 - Depends on: REF-001
 - Files:
   - `src/game/GameEngine.ts`
@@ -149,6 +159,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: S
+- Status: done
 - Depends on: REF-001
 - Files:
   - `src/game/GameEngine.ts`
@@ -163,6 +174,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: M
+- Status: done
 - Depends on: BUG-103, BUG-104
 - Files:
   - `src/game/GameEngine.ts`
@@ -224,6 +236,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: L
+- Status: in progress
 - Depends on: ENG-201
 - Files:
   - `src/game/systems/CombatSystem.ts`
@@ -239,6 +252,7 @@ Phases 4-7 can partially overlap after Phase 3 is stable.
 
 - Priority: P0
 - Size: L
+- Status: in progress
 - Depends on: ENG-201
 - Files:
   - `src/game/systems/SpawnSystem.ts`
