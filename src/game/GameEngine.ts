@@ -6,6 +6,8 @@ import { BossSystem, BossSystemContext } from './systems/BossSystem';
 import { CombatSystem, CombatSystemContext, EnemyDamageOptions, EnemyDefeatOptions } from './systems/CombatSystem';
 import { CollisionSystem, CollisionSystemContext, getEnemyRenderSize } from './systems/CollisionSystem';
 import { ProjectileSystem, ProjectileSystemContext } from './systems/ProjectileSystem';
+import { SpawnSystem, SpawnSystemContext } from './systems/SpawnSystem';
+import { EnvironmentSystem, EnvironmentSystemContext } from './systems/EnvironmentSystem';
 
 
 
@@ -55,9 +57,9 @@ export class GameEngine {
     private readonly bossSystem: BossSystem = new BossSystem();
     private readonly collisionSystem: CollisionSystem = new CollisionSystem();
     private readonly projectileSystem: ProjectileSystem = new ProjectileSystem();
+    private readonly spawnSystem: SpawnSystem = new SpawnSystem();
+    private readonly environmentSystem: EnvironmentSystem = new EnvironmentSystem();
 
-    // Internals
-    private spawnTimer: number = 0;
     // Buff Timers
     private rapidFireTimer: number = 0;
     private spreadShotTimer: number = 0;
@@ -65,10 +67,6 @@ export class GameEngine {
     // private bgStars: { x: number, y: number, z: number }[] = []; REMOVED for Procedural Parallax
     private spriteCache: Map<string, HTMLCanvasElement> = new Map();
     private onUIUpdate: (state: GameState) => void;
-    // Environment
-    private windTimer: number = 0;
-    private windActive: boolean = false;
-    private windVector: { x: number, y: number } = { x: 0, y: 0 };
     private onLevelUp: () => void;
     private onGameOver: () => void;
 
@@ -127,11 +125,6 @@ export class GameEngine {
             shipId: shipId,
             voidMass: 0
         };
-
-        // solar wind state
-        this.windTimer = 0;
-        this.windActive = false;
-        this.windVector = { x: 0, y: 0 };
 
         // Init Player
         this.player = {
@@ -200,12 +193,7 @@ export class GameEngine {
     }
 
     private updateSector(dt: number) {
-        if (this.state.bossActive) return; // Timer pauses during boss fight
-
-        this.state.sectorTimer += dt;
-        if (this.state.sectorTimer >= SETTINGS.SECTOR.BOSS_SPAWN_TIME) {
-            this.spawnBoss();
-        }
+        this.spawnSystem.updateSectorProgress(this.getSpawnContext(), dt);
     }
 
     private spawnBoss() {
@@ -323,6 +311,36 @@ export class GameEngine {
         };
     }
 
+    private getSpawnContext(): SpawnSystemContext {
+        return {
+            state: this.state,
+            player: this.player,
+            enemies: this.enemies,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM,
+            spawnBoss: () => this.spawnBoss()
+        };
+    }
+
+    private getEnvironmentContext(): EnvironmentSystemContext {
+        return {
+            player: this.player,
+            enemies: this.enemies,
+            gems: this.gems,
+            particles: this.particles,
+            obstacles: this.obstacles,
+            beacons: this.beacons,
+            width: this.width,
+            height: this.height,
+            cameraZoom: this.CAMERA_ZOOM,
+            spawnExplosion: (x, y, color, count) => this.spawnExplosion(x, y, color, count),
+            spawnDamageText: (x, y, damage) => this.spawnDamageText(x, y, damage),
+            triggerFlash: (color, intensity) => this.triggerFlash(color, intensity),
+            applyDirectDamageToEnemy: (enemy, damage, options) => this.applyDirectDamageToEnemy(enemy, damage, options)
+        };
+    }
+
     private defeatEnemy(enemy: Enemy, options: EnemyDefeatOptions = {}) {
         this.combatSystem.defeatEnemy(this.getCombatContext(), enemy, options);
     }
@@ -407,97 +425,8 @@ export class GameEngine {
         this.player.y += this.player.vy * dt;
     }
 
-    private getEnemySpawnInterval(): number {
-        const sectorBaseInterval = Math.max(
-            SETTINGS.ENEMY.SPAWN_RATE_MIN,
-            SETTINGS.ENEMY.SPAWN_RATE_START - ((this.state.currentSector - 1) * SETTINGS.ENEMY.SPAWN_RATE_STEP)
-        );
-        const earlyGameProgress = Math.min(1, this.state.timeSurvived / SETTINGS.ENEMY.EARLY_GAME_DURATION);
-        const earlyGameDelay = (1 - earlyGameProgress) * SETTINGS.ENEMY.EARLY_GAME_EXTRA_DELAY;
-
-        return sectorBaseInterval + earlyGameDelay;
-    }
-
-    private getInitialEnemyShootCooldown(): number {
-        return SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN +
-            Math.random() * (SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MAX - SETTINGS.ENEMY.SHOOT_COOLDOWN_INITIAL_MIN);
-    }
-
     private handleSpawning(dt: number) {
-        // 3. Max Enemy Cap
-        const enemyCap = 20 + (this.state.currentSector * 5);
-        if (this.enemies.length >= enemyCap) return;
-
-        this.spawnTimer -= dt;
-        if (this.spawnTimer <= 0) {
-            this.spawnTimer = this.getEnemySpawnInterval();
-
-            const angle = Math.random() * Math.PI * 2;
-            const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) / 2 + SETTINGS.WORLD.VIEW_PADDING;
-
-            // Base Stats based on Level/Sector
-            let hp = SETTINGS.ENEMY.BASE_HP + (this.state.level * 8); // Buffed from 5
-            let speed = SETTINGS.ENEMY.BASE_SPEED + (this.state.level * 3); // Buffed from 2
-            let size = 30; // Medium/Standard
-            let color = undefined; // Undefined means use Sector Default
-
-            // 1. Progressive Enemy Spawning (Sector-based probabilities)
-            const sector = this.state.currentSector;
-            const roll = Math.random();
-
-            let isSwarmer = false;
-            let isTank = false;
-
-            if (sector === 1) {
-                // 100% Standard
-            } else if (sector === 2) {
-                // 20% Swarmer, 80% Standard
-                if (roll < 0.20) isSwarmer = true;
-            } else if (sector >= 3 && sector < 5) {
-                // 20% Swarmer, 15% Tank, 65% Standard
-                if (roll < 0.20) isSwarmer = true;
-                else if (roll < 0.35) isTank = true;
-            } else {
-                // Sector 5+: 30% Swarmer, 25% Tank, 45% Standard
-                if (roll < 0.30) isSwarmer = true;
-                else if (roll < 0.55) isTank = true;
-            }
-
-            if (isSwarmer) {
-                // ARCHETYPE A: Swarmer
-                // Fast, Weak, Small, Gold
-                speed *= 1.6;
-                hp *= 0.5;
-                size = 20;
-                color = '#FFD700'; // Gold
-            } else if (isTank) {
-                // ARCHETYPE B: Armored
-                // Slow, Tanky, Large, Purple/Green
-                speed *= 0.6; // bit faster than 0.5
-                hp *= 2.5;
-                size = 45;
-                color = Math.random() > 0.5 ? '#800080' : '#006400';
-            }
-            // Else: Standard
-
-            this.enemies.push({
-                x: this.player.x + Math.cos(angle) * dist,
-                y: this.player.y + Math.sin(angle) * dist,
-                hp: hp,
-                maxHp: hp, // Ensure maxHp is set for bars if needed later
-                speed: speed,
-                markedForDeletion: false,
-                spriteType: Math.floor(Math.random() * 3),
-                frameCount: 0,
-                customSize: size,
-                bossColor: color,
-                isBoss: false,
-                shootCooldown: this.getInitialEnemyShootCooldown(),
-                aiState: AIState.CHASING,
-                stateTimer: 0,
-                chargeTimer: 0
-            });
-        }
+        this.spawnSystem.handleSpawning(this.getSpawnContext(), dt);
     }
 
     private handleCombat(time: number) {
@@ -700,120 +629,8 @@ export class GameEngine {
     }
 
     private handleEnvironment(dt: number) {
-        // 1. Solar Wind
-        this.windTimer += dt;
-        if (!this.windActive) {
-            if (this.windTimer > 15) { // Every 15s
-                this.windActive = true;
-                this.windTimer = 0; // Duration 5s
-                const angle = Math.random() * Math.PI * 2;
-                this.windVector = { x: Math.cos(angle) * 100, y: Math.sin(angle) * 100 };
-                this.triggerFlash('white', 0.2);
-                this.spawnDamageText(this.player.x, this.player.y - 100, 0);
-            }
-        } else {
-            if (this.windTimer > 5) {
-                this.windActive = false;
-                this.windTimer = 0;
-            }
-        }
-
-        // Apply Wind
-        if (this.windActive) {
-            const windX = this.windVector.x * dt;
-            const windY = this.windVector.y * dt;
-            this.player.x += windX * 0.5; // Player resists a bit
-            this.player.y += windY * 0.5;
-            this.enemies.forEach(e => { e.x += windX; e.y += windY; });
-            this.gems.forEach(g => { g.x += windX * 2; g.y += windY * 2; });
-            this.particles.forEach(p => { p.x += windX * 3; p.y += windY * 3; });
-        }
-
-        // 2. Obstacles
-        // Spawn randomly outside view
-        if (Math.random() < 0.008) { // Slightly increased chance since they spawn far out
-            // Calculate spawn angle based on player movement to spawn "in front"
-            let angle = Math.random() * Math.PI * 2;
-            if (Math.abs(this.player.vx) > 0.1 || Math.abs(this.player.vy) > 0.1) {
-                const moveAngle = Math.atan2(this.player.vy, this.player.vx);
-                // Spawn in a 90 degree arc in front of player
-                angle = moveAngle + (Math.random() - 0.5) * (Math.PI / 2);
-            }
-
-            const dist = (Math.max(this.width, this.height) / this.CAMERA_ZOOM) * 0.8 + 200; // Just outside view
-            // Procedural Vertices Generation
-            const vertexCount = Math.floor(Math.random() * 5) + 8; // 8 to 12 vertices
-            const vertices: { x: number, y: number }[] = [];
-            const size = 40 + Math.random() * 30;
-
-            for (let i = 0; i < vertexCount; i++) {
-                const angle = (i / vertexCount) * Math.PI * 2;
-                // Random variation in radius (0.7 to 1.3 of base size) to create "rock" shape
-                const r = size * (0.7 + Math.random() * 0.6);
-                vertices.push({
-                    x: Math.cos(angle) * r,
-                    y: Math.sin(angle) * r
-                });
-            }
-
-            this.obstacles.push({
-                x: this.player.x + Math.cos(angle) * dist,
-                y: this.player.y + Math.sin(angle) * dist,
-                size: size,
-                color: '#555', // Will be overridden by render style, but kept for fallback
-                markedForDeletion: false,
-                isExploding: false,
-                explodeTimer: 0,
-                vertices: vertices
-            });
-        }
-
-        // 3. Supply Beacons (Risk/Reward)
-        // 0.5% chance per second (assuming 60fps, dt is roughly 0.016, so check every frame?)
-        // Let's do a timer check or random check. 0.5% per second means 0.005 probability in 1s.
-        // In one frame (dt), prob = 0.005 * dt.
-        if (this.beacons.length < 1 && Math.random() < 0.005 * dt) {
-            // "Rarely, a 'Beacon' spawns." - Let's spawn it within bounds so player sees it.
-            const x = this.player.x + (Math.random() - 0.5) * this.width;
-            const y = this.player.y + (Math.random() - 0.5) * this.height;
-
-            this.beacons.push({
-                x, y, radius: 25, active: true
-            });
-            this.spawnDamageText(x, y - 50, "ANOMALY DETECTED"); // Announcement
-        }
-
-        this.obstacles.forEach(o => {
-            if (o.isExploding) {
-                o.explodeTimer -= dt;
-                o.color = Math.random() > 0.5 ? 'red' : 'orange';
-                if (o.explodeTimer <= 0) {
-                    o.markedForDeletion = true;
-                    this.spawnExplosion(o.x, o.y, 'orange', 30);
-                    // AOE Damage
-                    this.enemies.forEach(e => {
-                        const dx = e.x - o.x;
-                        const dy = e.y - o.y;
-                        if (Math.sqrt(dx * dx + dy * dy) < 150) {
-                            this.applyDirectDamageToEnemy(e, 100, {
-                                damageText: false,
-                                spawnPowerUpOnKill: true
-                            });
-                        }
-                    });
-                }
-            }
-            // Cleanup distance - Despawn if too far behind
-            const dx = this.player.x - o.x;
-            const dy = this.player.y - o.y;
-            if (Math.sqrt(dx * dx + dy * dy) < 2500) {
-                // Keep
-            } else {
-                o.markedForDeletion = true;
-            }
-        });
-
-        this.obstacles = this.obstacles.filter(o => !o.markedForDeletion);
+        const environmentUpdate = this.environmentSystem.updateEnvironment(this.getEnvironmentContext(), dt);
+        this.obstacles = environmentUpdate.obstacles;
     }
 
     private spawnExplosion(x: number, y: number, color: string, count: number = 15) {
