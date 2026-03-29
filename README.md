@@ -1,6 +1,6 @@
-# Nova Starship Survivor
+# Rogue Invaders Survivor
 
-Nova Starship Survivor is a browser-based survivor shooter built with React, TypeScript, and the HTML5 Canvas API.
+Rogue Invaders Survivor is a browser-based survivor shooter built with React, TypeScript, and the HTML5 Canvas API.
 
 ## Current Features
 
